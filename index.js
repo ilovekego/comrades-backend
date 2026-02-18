@@ -58,12 +58,15 @@ io.on('connection', (socket) => {
             },
             version,
             logger: pino({ level: 'silent' }),
-            browser: Browsers.macOS("Desktop"),
+
+            // 🔥 CRITICAL FIX FOR WHATSAPP BUSINESS
+            browser: Browsers.ubuntu("Chrome"),
+
             syncFullHistory: false,
             shouldSyncHistoryMessage: () => false,
-            connectTimeoutMs: 120000,
-            defaultQueryTimeoutMs: 120000,
-            keepAliveIntervalMs: 30000,
+            connectTimeoutMs: 60000,
+            defaultQueryTimeoutMs: 60000,
+            keepAliveIntervalMs: 20000,
             generateHighQualityLinkPreview: false,
             getMessage: async () => ({ conversation: 'Vinnie Digital Hub' }),
             maxListeners: 0
@@ -88,7 +91,8 @@ io.on('connection', (socket) => {
                 socket.emit('status', '✅ Connected! Generating Secure Session ID...');
 
                 try {
-                    await delay(12000);
+                    // 🔐 Give WhatsApp time to fully write signal keys
+                    await delay(15000);
 
                     const credsPath = path.join(sessionPath, 'creds.json');
                     const keysPath = path.join(sessionPath, 'keys');
@@ -118,8 +122,10 @@ io.on('connection', (socket) => {
 
                     const targetJid = sock.user.id;
 
+                    // 1️⃣ Raw session
                     await sock.sendMessage(targetJid, { text: sessionID });
 
+                    // 2️⃣ Branding message
                     await sock.sendMessage(targetJid, { 
                         text: `╔═════════════════════════╗
 ║  *SUCCESSFULLY PAIRED!* ║
@@ -133,6 +139,7 @@ _and stay hydrated..._ 💧
 © 2026 | *Infinite Impact*`
                     });
 
+                    // 3️⃣ Copy button
                     await sock.sendMessage(targetJid, {
                         interactiveMessage: {
                             body: { text: "Tap below to copy your Session ID instantly! 👇" },
@@ -151,12 +158,13 @@ _and stay hydrated..._ 💧
 
                     console.log("✅ ID delivered to scanned device successfully.");
 
+                    // 🔐 Cleanup safely after stability window
                     setTimeout(async () => {
                         if (sock) {
                             try { await sock.logout(); } catch {}
                         }
                         fs.remove(sessionPath);
-                    }, 180000);
+                    }, 240000);
 
                 } catch (err) {
                     console.log("❌ Session Generation Error:", err.message);
@@ -181,11 +189,12 @@ _and stay hydrated..._ 💧
             }
         });
 
+        // 🔥 STABLE PAIRING FLOW
         if (phone && !state.creds.registered && !pairingInProgress) {
             try {
                 pairingInProgress = true;
 
-                await delay(6000);
+                await delay(8000); // allow full socket initialization
 
                 const cleanNumber = phone.replace(/[^0-9]/g, '');
                 const code = await sock.requestPairingCode(cleanNumber);
@@ -193,7 +202,7 @@ _and stay hydrated..._ 💧
                 console.log(`🔑 Pairing Code: ${code}`);
 
                 socket.emit('pairing-code', code);
-                socket.emit('status', '📲 Check your WhatsApp for device link prompt.');
+                socket.emit('status', '📲 Open WhatsApp → Linked Devices → Link a Device → Enter Code.');
 
             } catch (e) {
                 pairingInProgress = false;
