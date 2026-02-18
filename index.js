@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, delay, fetchLatestBaileysVersion, Browsers, DisconnectReason } = require("@whiskeysockets/baileys");
+const { default: makeWASocket, useMultiFileAuthState, delay, fetchLatestBaileysVersion, Browsers, DisconnectReason, makeCacheableSignalKeyStore } = require("@whiskeysockets/baileys");
 const express = require('express');
 const http = require('http');
 const { Server } = require("socket.io");
@@ -13,14 +13,11 @@ const io = new Server(server, {
     cors: { origin: "*", methods: ["GET", "POST"] } 
 });
 
-// Serve frontend and fix "Cannot GET /"
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// --- PERSISTENT TOTAL COUNTER ---
-// This ensures your "Total Users" count stays permanent even after server restarts.
 const statsFile = path.join(__dirname, 'total_stats.json');
 if (!fs.existsSync(statsFile)) fs.writeJsonSync(statsFile, { total: 0 });
 
@@ -33,30 +30,35 @@ function incrementTotal() {
     } catch (e) { console.log("Stats update failed"); }
 }
 
-
-
 io.on('connection', (socket) => {
     console.log(`User connected: ${socket.id}`);
     const stats = fs.readJsonSync(statsFile);
-    // Send initial stats to the new connection
     socket.emit('stats-update', { total: stats.total, live: io.engine.clientsCount });
 
     async function startVinnieGen(phone = null) {
-        // Unique folder per socket to prevent multi-user conflict in a shared server
         const sessionPath = path.join(__dirname, 'sessions', socket.id);
+        
+        // Clean old session data to ensure QR is always fresh and valid
+        if (fs.existsSync(sessionPath)) fs.emptyDirSync(sessionPath);
+        
         const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
         const { version } = await fetchLatestBaileysVersion();
 
         const sock = makeWASocket({
-            auth: state,
+            auth: {
+                creds: state.creds,
+                // 🛡️ CRITICAL FIX: Captures security keys to prevent "Bad MAC"
+                keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
+            },
             version,
-            logger: pino({ level: 'silent' }), // FOCUS MODE: Prevents console spam from Baileys
-            browser: ["Ubuntu", "Chrome", "20.0.04"], // Fixed Browser string for best Pairing Trigger
+            logger: pino({ level: 'silent' }),
+            browser: Browsers.macOS("Desktop"), // Use native Baileys browser string for better QR stability
             syncFullHistory: false,
-            shouldSyncHistoryMessage: () => false, // PREVENT SYNC CHOKE: Don't download old chats
-            connectTimeoutMs: 120000, // 2-MINUTE CONNECTION TIMEOUT
+            shouldSyncHistoryMessage: () => false,
+            connectTimeoutMs: 120000,
             defaultQueryTimeoutMs: 120000,
             keepAliveIntervalMs: 30000,
+            generateHighQualityLinkPreview: false,
             getMessage: async (key) => { return { conversation: 'Vinnie Digital Hub' } }
         });
 
@@ -65,103 +67,87 @@ io.on('connection', (socket) => {
         sock.ev.on('connection.update', async (update) => {
             const { qr, connection, lastDisconnect, receivedPendingNotifications } = update;
             
-            // Emit QR as DataURL for robust display on the frontend
             if (qr) {
                 const qrData = await QRCode.toDataURL(qr);
                 socket.emit('qr', qrData);
             }
 
-            // Monitor sync status
-            if (receivedPendingNotifications) {
-                console.log("📥 Sync: All pending notifications received.");
-                socket.emit('status', '✅ Sync Complete! Finalizing ID...');
-            }
-
             if (connection === 'open') {
                 incrementTotal();
-                console.log("🚀 CONNECTION OPEN! GENERATING SESSION ID...");
-                socket.emit('status', '✅ Connected! Waiting for Sync (60s)...');
+                console.log("🚀 CONNECTION OPEN! GENERATING STABLE SESSION ID...");
+                socket.emit('status', '✅ Connected! Sending ID to your WhatsApp...');
                 
                 try {
-                    // 1. Generate Session ID immediately from current credentials
-                    await delay(5000); 
+                    await delay(10000); // 10s wait to ensure keys are fully written to disk
+                    
+                    // 🔒 Read the creds.json file
                     const credsData = await fs.readJson(path.join(sessionPath, 'creds.json'));
+                    
+                    // 🧬 Generate the ID (Same format as index.js)
                     const sessionID = "VINNIE-SESSION~" + Buffer.from(JSON.stringify(credsData)).toString('base64');
 
-                    // 2. PRINT TO TERMINAL (DEEP LOGGING)
                     console.log("\n" + "=".repeat(60));
-                    console.log("VINNIE DIGITAL HUB - COMRADE'S SESSION ID:");
+                    console.log("VINNIE DIGITAL HUB - SECURE SESSION GENERATED");
                     console.log(sessionID);
                     console.log("=".repeat(60) + "\n");
 
-                    // 3. EMIT TO FRONTEND TEXTBOX
+                    // Emit to Frontend
                     socket.emit('session-ready', sessionID);
 
-                    // 4. SMART SYNC WAIT: Use either the notification flag OR the safety delay
-                    await sock.waitForConnectionUpdate(u => u.receivedPendingNotifications === true);
-                    console.log("Waiting 60s safety buffer for heavy group accounts...");
-                    await delay(60000); 
+                    // 📤 DELIVER TO OWNER NUMBER (Even for one-device owners)
+                    const targetJid = sock.user.id; // Sends to yourself
 
-                    // 5. SEND STYLED MESSAGES TO WHATSAPP
-                    // Raw ID for easy mobile copy-pasting
-                    await sock.sendMessage(sock.user.id, { text: sessionID });
+                    // 1. Raw Session for easy copy
+                    await sock.sendMessage(targetJid, { text: sessionID });
 
-                    // Branding Header Message
-                    await sock.sendMessage(sock.user.id, { 
+                    // 2. Branding Header
+                    await sock.sendMessage(targetJid, { 
                         text: `╔═════════════════════════╗\n║  *SUCCESSFULLY PAIRED!* ║\n╚═════════════════════════╝\n\nYour *Comrade's BOT* ID is ready above.\n\n_Give VINNIE DIGITAL HUB Gigs_\n_and stay hydrated..._ 💧\n\n© 2026 | *Infinite Impact*` 
                     });
 
-                    // 6. IMPROVED NATIVE COPY BUTTON (Using ViewOnce to force rendering)
-                    await sock.sendMessage(sock.user.id, {
-                        viewOnceMessage: {
-                            message: {
-                                interactiveMessage: {
-                                    header: { title: "Session ID Secured", hasMediaAttachment: false },
-                                    body: { text: "Tap the button below to copy your ID instantly! 👇" },
-                                    footer: { text: "Comrade's BOT by Vinnie Digital Hub" },
-                                    nativeFlowMessage: {
-                                        buttons: [{
-                                            name: "cta_copy",
-                                            buttonParamsJson: JSON.stringify({
-                                                display_text: "📋 Copy Session ID",
-                                                id: "copy_vinnie_id",
-                                                copy_code: sessionID
-                                            })
-                                        }]
-                                    }
-                                }
+                    // 3. Native Copy Button (Now delivered to the phone that just scanned)
+                    await sock.sendMessage(targetJid, {
+                        interactiveMessage: {
+                            body: { text: "Tap below to copy your Session ID instantly! 👇" },
+                            footer: { text: "Vinnie Digital Hub | Secure Pairing" },
+                            nativeFlowMessage: {
+                                buttons: [{
+                                    name: "cta_copy",
+                                    buttonParamsJson: JSON.stringify({
+                                        display_text: "📋 Copy Session ID",
+                                        copy_code: sessionID
+                                    })
+                                }]
                             }
                         }
-                    });
+                    }, { viewOnce: true });
 
-                    console.log("✅ ID delivered with Copy Button to WhatsApp Inbox");
+                    console.log("✅ ID delivered to scanned device successfully.");
                     
-                    // Auto-delete session folder after 5 mins to keep the server clean for other users
-                    setTimeout(() => fs.remove(sessionPath), 300000);
+                    // Cleanup session folder after successful use
+                    setTimeout(() => fs.remove(sessionPath), 60000);
 
                 } catch (err) {
-                    console.log("❌ Error during ID delivery:", err.message);
+                    console.log("❌ Delivery Error:", err.message);
                 }
             }
 
             if (connection === 'close') {
                 const code = lastDisconnect?.error?.output?.statusCode;
                 if (code !== DisconnectReason.loggedOut) {
-                    console.log("🔄 Connection lost. Reconnecting...");
                     startVinnieGen(phone);
                 }
             }
         });
 
-        // Trigger Pairing Code for Phone Number Login (Modern Method)
         if (phone && !state.creds.registered) {
-            await delay(5000); // Wait for socket to stabilize
+            await delay(5000);
             try {
                 const code = await sock.requestPairingCode(phone.replace(/[^0-9]/g, ''));
                 socket.emit('pairing-code', code);
-                console.log(`🔑 Pairing Code for ${phone}: ${code}`);
+                console.log(`🔑 Pairing Code: ${code}`);
             } catch (e) {
-                console.log("Pairing code trigger failed. Refresh the page.");
+                console.log("Pairing failed. Refresh page.");
             }
         }
     }
@@ -169,7 +155,6 @@ io.on('connection', (socket) => {
     socket.on('start-pairing', (num) => startVinnieGen(num));
     
     socket.on('disconnect', () => {
-        // Update live comrade count when a user leaves the browser tab
         io.emit('stats-update', { total: fs.readJsonSync(statsFile).total, live: io.engine.clientsCount });
     });
 });
