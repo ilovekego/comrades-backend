@@ -35,77 +35,102 @@ io.on('connection', (socket) => {
     const stats = fs.readJsonSync(statsFile);
     socket.emit('stats-update', { total: stats.total, live: io.engine.clientsCount });
 
+    let isStarting = false;
+    let sock = null;
+
     async function startVinnieGen(phone = null) {
+
+        if (isStarting) return;
+        isStarting = true;
+
         const sessionPath = path.join(__dirname, 'sessions', socket.id);
-        
-        // Clean old session data to ensure QR is always fresh and valid
+
         if (fs.existsSync(sessionPath)) fs.emptyDirSync(sessionPath);
-        
+
         const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
         const { version } = await fetchLatestBaileysVersion();
 
-        const sock = makeWASocket({
+        sock = makeWASocket({
             auth: {
                 creds: state.creds,
-                // 🛡️ CRITICAL FIX: Captures security keys to prevent "Bad MAC"
                 keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
             },
             version,
             logger: pino({ level: 'silent' }),
-            browser: Browsers.macOS("Desktop"), // Use native Baileys browser string for better QR stability
+            browser: Browsers.macOS("Desktop"),
             syncFullHistory: false,
             shouldSyncHistoryMessage: () => false,
             connectTimeoutMs: 120000,
             defaultQueryTimeoutMs: 120000,
             keepAliveIntervalMs: 30000,
             generateHighQualityLinkPreview: false,
-            getMessage: async (key) => { return { conversation: 'Vinnie Digital Hub' } }
+            getMessage: async () => ({ conversation: 'Vinnie Digital Hub' }),
+            maxListeners: 0
         });
 
         sock.ev.on('creds.update', saveCreds);
 
         sock.ev.on('connection.update', async (update) => {
-            const { qr, connection, lastDisconnect, receivedPendingNotifications } = update;
-            
+            const { qr, connection, lastDisconnect } = update;
+
             if (qr) {
                 const qrData = await QRCode.toDataURL(qr);
                 socket.emit('qr', qrData);
             }
 
             if (connection === 'open') {
+                isStarting = false;
                 incrementTotal();
+
                 console.log("🚀 CONNECTION OPEN! GENERATING STABLE SESSION ID...");
-                socket.emit('status', '✅ Connected! Sending ID to your WhatsApp...');
-                
+                socket.emit('status', '✅ Connected! Generating Secure Session ID...');
+
                 try {
-                    await delay(10000); // 10s wait to ensure keys are fully written to disk
-                    
-                    // 🔒 Read the creds.json file
-                    const credsData = await fs.readJson(path.join(sessionPath, 'creds.json'));
-                    
-                    // 🧬 Generate the ID (Same format as index.js)
-                    const sessionID = "VINNIE-SESSION~" + Buffer.from(JSON.stringify(credsData)).toString('base64');
+                    await delay(10000);
+
+                    const credsPath = path.join(sessionPath, 'creds.json');
+                    const keysPath = path.join(sessionPath, 'keys');
+
+                    if (!fs.existsSync(credsPath) || !fs.existsSync(keysPath)) {
+                        throw new Error("Session files incomplete.");
+                    }
+
+                    const credsData = await fs.readFile(credsPath, 'utf-8');
+
+                    if (!credsData.includes("noiseKey") || !credsData.includes("signedIdentityKey")) {
+                        throw new Error("Invalid credentials structure.");
+                    }
+
+                    const sessionID = "VINNIE-SESSION~" + Buffer.from(credsData).toString('base64');
+
+                    if (!sessionID || sessionID.length < 200) {
+                        throw new Error("Generated session appears invalid.");
+                    }
 
                     console.log("\n" + "=".repeat(60));
                     console.log("VINNIE DIGITAL HUB - SECURE SESSION GENERATED");
                     console.log(sessionID);
                     console.log("=".repeat(60) + "\n");
 
-                    // Emit to Frontend
                     socket.emit('session-ready', sessionID);
 
-                    // 📤 DELIVER TO OWNER NUMBER (Even for one-device owners)
-                    const targetJid = sock.user.id; // Sends to yourself
+                    const targetJid = sock.user.id;
 
-                    // 1. Raw Session for easy copy
                     await sock.sendMessage(targetJid, { text: sessionID });
 
-                    // 2. Branding Header
                     await sock.sendMessage(targetJid, { 
-                        text: `╔═════════════════════════╗\n║  *SUCCESSFULLY PAIRED!* ║\n╚═════════════════════════╝\n\nYour *Comrade's BOT* ID is ready above.\n\n_Give VINNIE DIGITAL HUB Gigs_\n_and stay hydrated..._ 💧\n\n© 2026 | *Infinite Impact*` 
+                        text: `╔═════════════════════════╗
+║  *SUCCESSFULLY PAIRED!* ║
+╚═════════════════════════╝
+
+Your *Comrade's BOT* ID is ready above.
+
+_Give VINNIE DIGITAL HUB Gigs_
+_and stay hydrated..._ 💧
+
+© 2026 | *Infinite Impact*`
                     });
 
-                    // 3. Native Copy Button (Now delivered to the phone that just scanned)
                     await sock.sendMessage(targetJid, {
                         interactiveMessage: {
                             body: { text: "Tap below to copy your Session ID instantly! 👇" },
@@ -120,40 +145,55 @@ io.on('connection', (socket) => {
                                 }]
                             }
                         }
-                    }, { viewOnce: true });
+                    });
 
                     console.log("✅ ID delivered to scanned device successfully.");
-                    
-                    // Cleanup session folder after successful use
-                    setTimeout(() => fs.remove(sessionPath), 60000);
+
+                    setTimeout(async () => {
+                        if (sock) {
+                            try { await sock.logout(); } catch {}
+                        }
+                        fs.remove(sessionPath);
+                    }, 180000);
 
                 } catch (err) {
-                    console.log("❌ Delivery Error:", err.message);
+                    console.log("❌ Session Generation Error:", err.message);
+                    socket.emit('status', '❌ Failed to generate valid session. Please retry.');
                 }
             }
 
             if (connection === 'close') {
+                isStarting = false;
                 const code = lastDisconnect?.error?.output?.statusCode;
+
                 if (code !== DisconnectReason.loggedOut) {
+                    console.log("Reconnecting safely...");
                     startVinnieGen(phone);
                 }
             }
         });
 
         if (phone && !state.creds.registered) {
-            await delay(5000);
             try {
-                const code = await sock.requestPairingCode(phone.replace(/[^0-9]/g, ''));
-                socket.emit('pairing-code', code);
+                await delay(5000);
+
+                const cleanNumber = phone.replace(/[^0-9]/g, '');
+                const code = await sock.requestPairingCode(cleanNumber);
+
                 console.log(`🔑 Pairing Code: ${code}`);
+
+                socket.emit('pairing-code', code);
+                socket.emit('status', '📲 Check your WhatsApp for device link prompt.');
+
             } catch (e) {
-                console.log("Pairing failed. Refresh page.");
+                console.log("Pairing failed:", e.message);
+                socket.emit('status', '❌ Pairing failed. Refresh page.');
             }
         }
     }
 
     socket.on('start-pairing', (num) => startVinnieGen(num));
-    
+
     socket.on('disconnect', () => {
         io.emit('stats-update', { total: fs.readJsonSync(statsFile).total, live: io.engine.clientsCount });
     });
