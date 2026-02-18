@@ -36,6 +36,7 @@ io.on('connection', (socket) => {
     socket.emit('stats-update', { total: stats.total, live: io.engine.clientsCount });
 
     let isStarting = false;
+    let pairingInProgress = false;
     let sock = null;
 
     async function startVinnieGen(phone = null) {
@@ -80,13 +81,14 @@ io.on('connection', (socket) => {
 
             if (connection === 'open') {
                 isStarting = false;
+                pairingInProgress = false;
                 incrementTotal();
 
                 console.log("🚀 CONNECTION OPEN! GENERATING STABLE SESSION ID...");
                 socket.emit('status', '✅ Connected! Generating Secure Session ID...');
 
                 try {
-                    await delay(10000);
+                    await delay(12000);
 
                     const credsPath = path.join(sessionPath, 'creds.json');
                     const keysPath = path.join(sessionPath, 'keys');
@@ -163,19 +165,27 @@ _and stay hydrated..._ 💧
             }
 
             if (connection === 'close') {
-                isStarting = false;
+
                 const code = lastDisconnect?.error?.output?.statusCode;
 
+                if (pairingInProgress) {
+                    console.log("Pairing handshake in progress — not reconnecting.");
+                    return;
+                }
+
                 if (code !== DisconnectReason.loggedOut) {
+                    isStarting = false;
                     console.log("Reconnecting safely...");
                     startVinnieGen(phone);
                 }
             }
         });
 
-        if (phone && !state.creds.registered) {
+        if (phone && !state.creds.registered && !pairingInProgress) {
             try {
-                await delay(5000);
+                pairingInProgress = true;
+
+                await delay(6000);
 
                 const cleanNumber = phone.replace(/[^0-9]/g, '');
                 const code = await sock.requestPairingCode(cleanNumber);
@@ -186,6 +196,7 @@ _and stay hydrated..._ 💧
                 socket.emit('status', '📲 Check your WhatsApp for device link prompt.');
 
             } catch (e) {
+                pairingInProgress = false;
                 console.log("Pairing failed:", e.message);
                 socket.emit('status', '❌ Pairing failed. Refresh page.');
             }
