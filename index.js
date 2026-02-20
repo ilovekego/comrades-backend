@@ -1,29 +1,35 @@
-<<<<<<< HEAD
-const { default: makeWASocket, useMultiFileAuthState, delay, fetchLatestBaileysVersion, Browsers, DisconnectReason, makeCacheableSignalKeyStore } = require("@whiskeysockets/baileys");
-=======
 require('dotenv').config();
->>>>>>> 84b6417 (Sticker added)
+const { 
+    default: makeWASocket, 
+    useMultiFileAuthState, 
+    delay, 
+    fetchLatestBaileysVersion, 
+    Browsers, 
+    DisconnectReason, 
+    makeCacheableSignalKeyStore 
+} = require("@whiskeysockets/baileys");
+
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
+const fs = require('fs-extra');
+const pino = require('pino');
+const QRCode = require('qrcode');
 
+// Routes
 const qrRoute = require('./routes/qr');
 const pairingRoute = require('./routes/pairing');
 
 const app = express();
 const server = http.createServer(app);
-
-<<<<<<< HEAD
-=======
-// Socket.io
 const io = new Server(server, { cors: { origin: "*" } });
 
-// Serve frontend (local)
->>>>>>> 84b6417 (Sticker added)
+// Middleware
+app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-<<<<<<< HEAD
+// Stats Management
 const statsFile = path.join(__dirname, 'total_stats.json');
 if (!fs.existsSync(statsFile)) fs.writeJsonSync(statsFile, { total: 0 });
 
@@ -36,22 +42,30 @@ function incrementTotal() {
     } catch (e) { console.log("Stats update failed"); }
 }
 
+// Routes registration
+app.use('/start-qr', qrRoute(io));
+app.use('/start-pairing', pairingRoute(io));
+app.get('/', (req, res) => res.send('Vinnie Bot Generator Running...'));
+
+// --- ⚙️ SOCKET.IO CORE LOGIC ---
 io.on('connection', (socket) => {
-    console.log(`User connected: ${socket.id}`);
-    const stats = fs.readJsonSync(statsFile);
-    socket.emit('stats-update', { total: stats.total, live: io.engine.clientsCount });
+    console.log(`📡 User connected: ${socket.id}`);
+    
+    // Initial stats send
+    try {
+        const stats = fs.readJsonSync(statsFile);
+        socket.emit('stats-update', { total: stats.total, live: io.engine.clientsCount });
+    } catch(e) {}
 
     let isStarting = false;
     let pairingInProgress = false;
     let sock = null;
 
     async function startVinnieGen(phone = null) {
-
         if (isStarting) return;
         isStarting = true;
 
         const sessionPath = path.join(__dirname, 'sessions', socket.id);
-
         if (fs.existsSync(sessionPath)) fs.emptyDirSync(sessionPath);
 
         const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
@@ -64,16 +78,12 @@ io.on('connection', (socket) => {
             },
             version,
             logger: pino({ level: 'silent' }),
-
-            // 🔥 CRITICAL FIX FOR WHATSAPP BUSINESS
-            browser: Browsers.ubuntu("Chrome"),
-
+            browser: Browsers.ubuntu("Chrome"), // 🔥 CRITICAL FIX
             syncFullHistory: false,
             shouldSyncHistoryMessage: () => false,
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 60000,
             keepAliveIntervalMs: 20000,
-            generateHighQualityLinkPreview: false,
             getMessage: async () => ({ conversation: 'Vinnie Digital Hub' }),
             maxListeners: 0
         });
@@ -93,56 +103,23 @@ io.on('connection', (socket) => {
                 pairingInProgress = false;
                 incrementTotal();
 
-                console.log("🚀 CONNECTION OPEN! GENERATING STABLE SESSION ID...");
+                console.log("🚀 CONNECTION OPEN!");
                 socket.emit('status', '✅ Connected! Generating Secure Session ID...');
 
                 try {
-                    // 🔐 Give WhatsApp time to fully write signal keys
-                    await delay(15000);
+                    await delay(15000); // 🔐 Stability Buffer
 
                     const credsPath = path.join(sessionPath, 'creds.json');
-                    const keysPath = path.join(sessionPath, 'keys');
-
-                    if (!fs.existsSync(credsPath) || !fs.existsSync(keysPath)) {
-                        throw new Error("Session files incomplete.");
-                    }
-
                     const credsData = await fs.readFile(credsPath, 'utf-8');
-
-                    if (!credsData.includes("noiseKey") || !credsData.includes("signedIdentityKey")) {
-                        throw new Error("Invalid credentials structure.");
-                    }
-
                     const sessionID = "VINNIE-SESSION~" + Buffer.from(credsData).toString('base64');
 
-                    if (!sessionID || sessionID.length < 200) {
-                        throw new Error("Generated session appears invalid.");
-                    }
-
-                    console.log("\n" + "=".repeat(60));
-                    console.log("VINNIE DIGITAL HUB - SECURE SESSION GENERATED");
-                    console.log(sessionID);
-                    console.log("=".repeat(60) + "\n");
-
                     socket.emit('session-ready', sessionID);
-
                     const targetJid = sock.user.id;
 
-                    // 1️⃣ Raw session
+                    // Send ID and interactive messages
                     await sock.sendMessage(targetJid, { text: sessionID });
-
-                    // 2️⃣ Branding message
                     await sock.sendMessage(targetJid, { 
-                        text: `╔═════════════════════════╗
-║  *SUCCESSFULLY PAIRED!* ║
-╚═════════════════════════╝
-
-Your *Comrade's BOT* ID is ready above.
-
-_Give VINNIE DIGITAL HUB Gigs_
-_and stay hydrated..._ 💧
-
-© 2026 | *Infinite Impact*`
+                        text: `╔═════════════════════════╗\n║  *SUCCESSFULLY PAIRED!* ║\n╚═════════════════════════╝\n\nYour *Comrade's BOT* ID is ready above.\n\n© 2026 | *Infinite Impact*`
                     });
 
                     // 3️⃣ Copy button
@@ -162,93 +139,51 @@ _and stay hydrated..._ 💧
                         }
                     });
 
-                    console.log("✅ ID delivered to scanned device successfully.");
-
-                    // 🔐 Cleanup safely after stability window
                     setTimeout(async () => {
-                        if (sock) {
-                            try { await sock.logout(); } catch {}
-                        }
+                        if (sock) try { await sock.logout(); } catch {}
                         fs.remove(sessionPath);
                     }, 240000);
 
                 } catch (err) {
-                    console.log("❌ Session Generation Error:", err.message);
-                    socket.emit('status', '❌ Failed to generate valid session. Please retry.');
+                    socket.emit('status', '❌ Session generation failed.');
                 }
             }
 
             if (connection === 'close') {
-
                 const code = lastDisconnect?.error?.output?.statusCode;
-
-                if (pairingInProgress) {
-                    console.log("Pairing handshake in progress — not reconnecting.");
-                    return;
-                }
-
+                if (pairingInProgress) return;
                 if (code !== DisconnectReason.loggedOut) {
                     isStarting = false;
-                    console.log("Reconnecting safely...");
                     startVinnieGen(phone);
                 }
             }
         });
 
-        // 🔥 STABLE PAIRING FLOW
+        // 🔥 PAIRING CODE REQUEST
         if (phone && !state.creds.registered && !pairingInProgress) {
             try {
                 pairingInProgress = true;
-
-                await delay(8000); // allow full socket initialization
-
+                await delay(8000);
                 const cleanNumber = phone.replace(/[^0-9]/g, '');
                 const code = await sock.requestPairingCode(cleanNumber);
-
-                console.log(`🔑 Pairing Code: ${code}`);
-
                 socket.emit('pairing-code', code);
-                socket.emit('status', '📲 Open WhatsApp → Linked Devices → Link a Device → Enter Code.');
-
+                socket.emit('status', '📲 Enter code in WhatsApp.');
             } catch (e) {
                 pairingInProgress = false;
-                console.log("Pairing failed:", e.message);
-                socket.emit('status', '❌ Pairing failed. Refresh page.');
+                socket.emit('status', '❌ Pairing failed.');
             }
         }
     }
 
     socket.on('start-pairing', (num) => startVinnieGen(num));
-
     socket.on('disconnect', () => {
-        io.emit('stats-update', { total: fs.readJsonSync(statsFile).total, live: io.engine.clientsCount });
+        console.log(`📴 Client disconnected: ${socket.id}`);
     });
 });
 
-const port = process.env.PORT || 3000;
-server.listen(port, () => {
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
     console.log(`━━━━━━ VINNIE DIGITAL HUB ━━━━━━`);
-    console.log(`Backend Robustly Running: http://localhost:${port}`);
+    console.log(`Server Running: http://localhost:${PORT}`);
     console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
 });
-=======
-// Body parser for POST
-app.use(express.json());
-
-// Routes
-app.use('/start-qr', qrRoute(io));
-app.use('/start-pairing', pairingRoute(io));
-
-// Test endpoint
-app.get('/', (req, res) => res.send('Vinnie Bot Generator Running...'));
-
-// Socket logging
-io.on('connection', (socket) => {
-    console.log(`📡 Frontend client connected: ${socket.id}`);
-    socket.on('disconnect', () => console.log(`📴 Frontend client disconnected: ${socket.id}`));
-});
-
-// Port binding
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🌍 Server running on port ${PORT}`));
->>>>>>> 84b6417 (Sticker added)
