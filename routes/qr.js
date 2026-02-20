@@ -12,8 +12,8 @@ const {
     makeCacheableSignalKeyStore, 
     delay, 
     DisconnectReason,
-    generateWAMessageFromContent, // Added for stable button delivery
-    proto // Added for button structure
+    generateWAMessageFromContent,
+    proto 
 } = require("@whiskeysockets/baileys");
 const { MongoClient } = require("mongodb");
 
@@ -51,7 +51,7 @@ module.exports = (io) => {
                     keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })),
                 },
                 printQRInTerminal: false,
-                logger: pino({ level: "fatal" }), // Reduced noise to prevent log overflow
+                logger: pino({ level: "fatal" }),
                 browser: Browsers.macOS("Safari"),
                 syncFullHistory: false,
                 shouldSyncHistoryMessage: () => false,
@@ -110,7 +110,6 @@ module.exports = (io) => {
                     const lineBot = "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛";
                     const flower = "✿";
 
-                    // Message A: Stylized Header
                     await sock.sendMessage(targetJid, {
                         text: `${lineTop}\n${lineMid}\n    ${flower} VINNIE SESSION ID ${flower}\n${lineMid}\n${lineBot}\n\n` +
                               `┌───『 SUCCESS 』───┐\n` +
@@ -119,10 +118,8 @@ module.exports = (io) => {
                               `└───────────────────┘`
                     });
 
-                    // Message B: The Raw ID
                     await sock.sendMessage(targetJid, { text: finalSessionId });
 
-                    // Message C: FIXED COPY BUTTON (Protocol Method)
                     try {
                         let msg = generateWAMessageFromContent(targetJid, {
                             viewOnceMessage: {
@@ -158,9 +155,14 @@ module.exports = (io) => {
 
                     io.emit("session-ready", finalSessionId);
 
+                    // ✅ FIXED CLOSING LOGIC
                     setTimeout(async () => {
-                        try { await sock.logout(); } catch (e) {}
+                        try { 
+                            sock.ev.removeAllListeners(); // Stop listening
+                            await sock.ws.close();        // Close socket ONLY (No logout)
+                        } catch (e) {}
                         await fs.remove(sessionDir);
+                        console.log("🔌 Generator closed safely. Session is preserved.");
                     }, 5000);
                 }
 
