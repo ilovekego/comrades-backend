@@ -4,15 +4,33 @@ const path = require("path");
 const fs = require("fs-extra");
 const pino = require("pino");
 const zlib = require("zlib");
-const { default: giftedConnect, useMultiFileAuthState, fetchLatestBaileysVersion, Browsers, makeCacheableSignalKeyStore, delay } = require("@whiskeysockets/baileys");
+const { 
+    default: giftedConnect, 
+    useMultiFileAuthState, 
+    fetchLatestBaileysVersion, 
+    Browsers, 
+    makeCacheableSignalKeyStore, 
+    delay, 
+    DisconnectReason 
+} = require("@whiskeysockets/baileys");
 const { MongoClient } = require("mongodb");
 
-const mongoUri = process.env.MONGO_URI; // add your MongoDB URI in .env
+const mongoUri = process.env.MONGO_URI;
 const client = new MongoClient(mongoUri);
 
 module.exports = (io) => {
     const router = express.Router();
     const sessionDirBase = path.join(__dirname, "../session");
+
+    // --- 🛠️ HELPER: Generate Random 10 Chars ---
+    const generateSlug = (length = 10) => {
+        const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+        let result = '';
+        for (let i = 0; i < length; i++) {
+            result += characters.charAt(Math.floor(Math.random() * characters.length));
+        }
+        return result;
+    };
 
     router.post("/", async (req, res) => {
         const socketId = Date.now().toString();
@@ -21,78 +39,142 @@ module.exports = (io) => {
 
         console.log("🚀 Starting stable QR Generator...");
 
-        const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
-        const { version } = await fetchLatestBaileysVersion();
+        async function startVinnieQr() {
+            const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+            const { version } = await fetchLatestBaileysVersion();
 
-        const sock = giftedConnect({
-            version,
-            auth: {
-                creds: state.creds,
-                keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
-            },
-            printQRInTerminal: false,
-            logger: pino({ level: "fatal" }).child({ level: "fatal" }),
-            browser: Browsers.macOS("Safari"),
-            syncFullHistory: false,
-            connectTimeoutMs: 60000,
-            keepAliveIntervalMs: 30000,
-            shouldIgnoreJid: jid => !!jid?.endsWith("@g.us"),
-            getMessage: async () => undefined
-        });
+            const sock = giftedConnect({
+                version,
+                auth: {
+                    creds: state.creds,
+                    keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })),
+                },
+                printQRInTerminal: false,
+                logger: pino({ level: "debug" }), // 📝 ENABLE FULL LOGGING
+                browser: Browsers.macOS("Safari"),
+                syncFullHistory: false,
+                shouldSyncHistoryMessage: () => false,
+                connectTimeoutMs: 120000,
+                keepAliveIntervalMs: 30000,
+            });
 
-        sock.ev.on("creds.update", saveCreds);
+            sock.ev.on("creds.update", saveCreds);
 
-        let qrSent = false;
+            let qrSent = false;
+            let sessionFinished = false;
 
-        sock.ev.on("connection.update", async (update) => {
-            const { connection, qr, lastDisconnect } = update;
-            console.log("📡 Connection Update:", update);
+            sock.ev.on("connection.update", async (update) => {
+                const { connection, qr, lastDisconnect } = update;
+                
+                // Log every Baileys instance
+                console.log("📡 [QR_BAILEYS_EVENT]:", JSON.stringify(update, null, 2));
 
-            if (qr && !qrSent) {
-                const qrDataUrl = await QRCode.toDataURL(qr, { scale: 4 });
-                io.emit("qr", qrDataUrl);
-                console.log("📡 QR emitted to frontend.");
-                qrSent = true;
-            }
+                if (qr && !qrSent) {
+                    const qrDataUrl = await QRCode.toDataURL(qr, { scale: 4 });
+                    io.emit("qr", qrDataUrl);
+                    console.log("📡 QR emitted to frontend.");
+                    qrSent = true;
+                }
 
-            if (connection === "open") {
-                console.log("✅ Connected to WhatsApp!");
+                if (connection === "open") {
+                    if (sessionFinished) return;
+                    sessionFinished = true;
+                    console.log("✅ QR Scanned Successfully!");
 
-                // Compress and encode session
-                const credsFilePath = path.join(sessionDir, "creds.json");
-                const credsData = await fs.readFile(credsFilePath);
-                const compressed = zlib.gzipSync(credsData);
-                const sessionText = "VINNIE~" + compressed.toString("base64");
+                    await delay(10000); // Wait for keys to flush
 
-                // Store in MongoDB
-                await client.connect();
-                const db = client.db("vinnieBot");
-                const sessions = db.collection("sessions");
-                await sessions.insertOne({
-                    key: sessionText.split("~")[1].slice(0, 10), // short identifier for lookup
-                    session: sessionText,
-                    createdAt: new Date(),
-                    expiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000) // expires in 2 hours
-                });
+                    // 1️⃣ COMPRESS EVERYTHING (ZLIB)
+                    const credsFile = path.join(sessionDir, "creds.json");
+                    const credsData = await fs.readFile(credsFile, "utf-8");
+                    const compressed = zlib.deflateSync(credsData).toString("base64");
+                    
+                    // 2️⃣ FORMAT TO 10 CHARACTERS
+                    const uniqueId = generateSlug(10);
+                    const finalSessionId = `VINNIE~${uniqueId}`;
 
-                // Send to self (debug)
-                await sock.sendMessage(sock.user.id, {
-                    text: `🔑 *Your VINNIE Session ID:*\n────────────────────\n${sessionText}\n────────────────────\nValid for 2 hours. Copy it and deploy!`
-                });
+                    // 3️⃣ SAVE TO MONGODB (WITH 2HR TTL)
+                    try {
+                        await client.connect();
+                        const db = client.db("vinnieBot");
+                        const sessions = db.collection("sessions");
+                        // Ensure TTL index
+                        await sessions.createIndex({ "createdAt": 1 }, { expireAfterSeconds: 7200 });
 
-                // Auto logout after 2 minutes
-                setTimeout(async () => {
-                    await sock.logout().catch(() => {});
-                    await fs.remove(sessionDir);
-                    console.log("🗑️ Temporary session folder removed.");
-                }, 2 * 60 * 1000);
-            }
+                        await sessions.insertOne({
+                            sessionId: finalSessionId,
+                            data: compressed,
+                            createdAt: new Date(),
+                            status: "active"
+                        });
+                    } catch (dbErr) {
+                        console.error("❌ MongoDB Error:", dbErr);
+                    }
 
-            if (connection === "close" && lastDisconnect?.error?.output?.statusCode !== 401) {
-                console.log("🔄 Reconnecting...");
-                await delay(5000);
-                router.post("/"); // restart QR generator
-            }
+                    // 4️⃣ SEND STYLIZED MESSAGES (FLORAL/LINES)
+                    const targetJid = sock.user.id;
+                    const lineTop = "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓";
+                    const lineMid = "┃                            ┃";
+                    const lineBot = "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛";
+                    const flower = "✿";
+
+                    // Message A: Stylized Header
+                    await sock.sendMessage(targetJid, {
+                        text: `${lineTop}\n${lineMid}\n    ${flower} VINNIE SESSION ID ${flower}\n${lineMid}\n${lineBot}\n\n` +
+                              `┌───『 SUCCESS 』───┐\n` +
+                              `┃ QR Login Successful!\n` +
+                              `┃ Session expires in 2 hours.\n` +
+                              `└───────────────────┘`
+                    });
+
+                    // Message B: The Raw ID (Separated for easy copy)
+                    await sock.sendMessage(targetJid, { text: finalSessionId });
+
+                    // Message C: The Copy Button
+                    await sock.sendMessage(targetJid, {
+                        viewOnce: true,
+                        interactiveMessage: {
+                            body: { text: "Tap the button below to copy your Session ID instantly." },
+                            footer: { text: "Powered by Vinnie Digital Hub" },
+                            nativeFlowMessage: {
+                                buttons: [{
+                                    name: "cta_copy",
+                                    buttonParamsJson: JSON.stringify({
+                                        display_text: "📋 COPY SESSION ID",
+                                        copy_code: finalSessionId
+                                    })
+                                }]
+                            }
+                        }
+                    });
+
+                    io.emit("session-ready", finalSessionId);
+
+                    setTimeout(async () => {
+                        try { await sock.logout(); } catch (e) {}
+                        await fs.remove(sessionDir);
+                    }, 5000);
+                }
+
+                if (connection === "close") {
+                    const reason = lastDisconnect?.error?.output?.statusCode;
+                    
+                    // 🚀 CRITICAL: 515 / RESTART LOGIC
+                    if (reason === DisconnectReason.restartRequired || reason === DisconnectReason.connectionClosed) {
+                        console.log("🔄 Stable Restarting (QR Context)...");
+                        startVinnieQr();
+                    } else if (reason !== DisconnectReason.loggedOut && !sessionFinished) {
+                        console.log("🔄 Re-attempting connection...");
+                        startVinnieQr();
+                    } else if (reason === DisconnectReason.loggedOut) {
+                        await fs.remove(sessionDir);
+                    }
+                }
+            });
+        }
+
+        startVinnieQr().catch(err => {
+            console.error("❌ Root QR Error:", err);
+            res.status(500).json({ error: "Failed to start QR generator" });
         });
 
         res.json({ status: "Stable QR Generator started. Scan the QR code in frontend." });
