@@ -11,7 +11,9 @@ const {
     Browsers, 
     makeCacheableSignalKeyStore, 
     delay, 
-    DisconnectReason 
+    DisconnectReason,
+    generateWAMessageFromContent, // Added for stable button delivery
+    proto // Added for button structure
 } = require("@whiskeysockets/baileys");
 const { MongoClient } = require("mongodb");
 
@@ -22,7 +24,6 @@ module.exports = (io) => {
     const router = express.Router();
     const sessionDirBase = path.join(__dirname, "../session");
 
-    // --- 🛠️ HELPER: Generate Random 10 Chars ---
     const generateSlug = (length = 10) => {
         const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
         let result = '';
@@ -50,7 +51,7 @@ module.exports = (io) => {
                     keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })),
                 },
                 printQRInTerminal: false,
-                logger: pino({ level: "debug" }), // 📝 ENABLE FULL LOGGING
+                logger: pino({ level: "fatal" }), // Reduced noise to prevent log overflow
                 browser: Browsers.macOS("Safari"),
                 syncFullHistory: false,
                 shouldSyncHistoryMessage: () => false,
@@ -66,9 +67,6 @@ module.exports = (io) => {
             sock.ev.on("connection.update", async (update) => {
                 const { connection, qr, lastDisconnect } = update;
                 
-                // Log every Baileys instance
-                console.log("📡 [QR_BAILEYS_EVENT]:", JSON.stringify(update, null, 2));
-
                 if (qr && !qrSent) {
                     const qrDataUrl = await QRCode.toDataURL(qr, { scale: 4 });
                     io.emit("qr", qrDataUrl);
@@ -81,23 +79,19 @@ module.exports = (io) => {
                     sessionFinished = true;
                     console.log("✅ QR Scanned Successfully!");
 
-                    await delay(10000); // Wait for keys to flush
+                    await delay(5000); 
 
-                    // 1️⃣ COMPRESS EVERYTHING (ZLIB)
                     const credsFile = path.join(sessionDir, "creds.json");
                     const credsData = await fs.readFile(credsFile, "utf-8");
                     const compressed = zlib.deflateSync(credsData).toString("base64");
                     
-                    // 2️⃣ FORMAT TO 10 CHARACTERS
                     const uniqueId = generateSlug(10);
                     const finalSessionId = `VINNIE~${uniqueId}`;
 
-                    // 3️⃣ SAVE TO MONGODB (WITH 2HR TTL)
                     try {
                         await client.connect();
                         const db = client.db("vinnieBot");
                         const sessions = db.collection("sessions");
-                        // Ensure TTL index
                         await sessions.createIndex({ "createdAt": 1 }, { expireAfterSeconds: 7200 });
 
                         await sessions.insertOne({
@@ -110,7 +104,6 @@ module.exports = (io) => {
                         console.error("❌ MongoDB Error:", dbErr);
                     }
 
-                    // 4️⃣ SEND STYLIZED MESSAGES (FLORAL/LINES)
                     const targetJid = sock.user.id;
                     const lineTop = "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓";
                     const lineMid = "┃                            ┃";
@@ -126,26 +119,42 @@ module.exports = (io) => {
                               `└───────────────────┘`
                     });
 
-                    // Message B: The Raw ID (Separated for easy copy)
+                    // Message B: The Raw ID
                     await sock.sendMessage(targetJid, { text: finalSessionId });
 
-                    // Message C: The Copy Button
-                    await sock.sendMessage(targetJid, {
-                        viewOnce: true,
-                        interactiveMessage: {
-                            body: { text: "Tap the button below to copy your Session ID instantly." },
-                            footer: { text: "Powered by Vinnie Digital Hub" },
-                            nativeFlowMessage: {
-                                buttons: [{
-                                    name: "cta_copy",
-                                    buttonParamsJson: JSON.stringify({
-                                        display_text: "📋 COPY SESSION ID",
-                                        copy_code: finalSessionId
+                    // Message C: FIXED COPY BUTTON (Protocol Method)
+                    try {
+                        let msg = generateWAMessageFromContent(targetJid, {
+                            viewOnceMessage: {
+                                message: {
+                                    interactiveMessage: proto.Message.InteractiveMessage.fromObject({
+                                        body: proto.Message.InteractiveMessage.Body.fromObject({
+                                            text: "Tap the button below to copy your Session ID instantly."
+                                        }),
+                                        footer: proto.Message.InteractiveMessage.Footer.fromObject({
+                                            text: "Powered by Vinnie Digital Hub"
+                                        }),
+                                        header: proto.Message.InteractiveMessage.Header.fromObject({
+                                            hasMediaAttachment: false
+                                        }),
+                                        nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.fromObject({
+                                            buttons: [{
+                                                name: "cta_copy",
+                                                buttonParamsJson: JSON.stringify({
+                                                    display_text: "📋 COPY SESSION ID",
+                                                    copy_code: finalSessionId
+                                                })
+                                            }]
+                                        })
                                     })
-                                }]
+                                }
                             }
-                        }
-                    });
+                        }, { userJid: targetJid, quoted: null });
+
+                        await sock.relayMessage(targetJid, msg.message, { messageId: msg.key.id });
+                    } catch (buttonErr) {
+                        console.log("⚠️ Interactive message failed, skipping button.");
+                    }
 
                     io.emit("session-ready", finalSessionId);
 
@@ -157,16 +166,10 @@ module.exports = (io) => {
 
                 if (connection === "close") {
                     const reason = lastDisconnect?.error?.output?.statusCode;
-                    
-                    // 🚀 CRITICAL: 515 / RESTART LOGIC
                     if (reason === DisconnectReason.restartRequired || reason === DisconnectReason.connectionClosed) {
-                        console.log("🔄 Stable Restarting (QR Context)...");
                         startVinnieQr();
                     } else if (reason !== DisconnectReason.loggedOut && !sessionFinished) {
-                        console.log("🔄 Re-attempting connection...");
                         startVinnieQr();
-                    } else if (reason === DisconnectReason.loggedOut) {
-                        await fs.remove(sessionDir);
                     }
                 }
             });
@@ -174,7 +177,6 @@ module.exports = (io) => {
 
         startVinnieQr().catch(err => {
             console.error("❌ Root QR Error:", err);
-            res.status(500).json({ error: "Failed to start QR generator" });
         });
 
         res.json({ status: "Stable QR Generator started. Scan the QR code in frontend." });
