@@ -11,8 +11,8 @@ const {
     makeCacheableSignalKeyStore,
     delay,
     DisconnectReason,
-    generateWAMessageFromContent, // Required for stable buttons
-    proto // Required for button structure
+    generateWAMessageFromContent,
+    proto 
 } = require("@whiskeysockets/baileys");
 const { MongoClient } = require("mongodb");
 
@@ -53,7 +53,7 @@ module.exports = (io) => {
                     creds: state.creds,
                     keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })),
                 },
-                logger: pino({ level: "fatal" }), // Reduced noise to prevent Heroku crashes
+                logger: pino({ level: "fatal" }),
                 browser: Browsers.macOS("Safari"),
                 syncFullHistory: false, 
                 shouldSyncHistoryMessage: () => false, 
@@ -63,9 +63,8 @@ module.exports = (io) => {
                 usePairingCode: true 
             });
 
-            // --- 🔑 PAIRING CODE LOGIC ---
             if (!sock.authState.creds.registered) {
-                await delay(3000); // Small wait to ensure socket is ready
+                await delay(3000); 
                 try {
                     const pairingCode = await sock.requestPairingCode(cleanedNumber);
                     console.log("🔑 Pairing Code Generated:", pairingCode);
@@ -117,7 +116,6 @@ module.exports = (io) => {
                     const lineBot = "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛";
                     const flower = "✿";
 
-                    // MESSAGE A: The Header
                     await sock.sendMessage(targetJid, {
                         text: `${lineTop}\n${lineMid}\n    ${flower} VINNIE SESSION ID ${flower}\n${lineMid}\n${lineBot}\n\n` +
                               `┌───『 SUCCESS 』───┐\n` +
@@ -126,10 +124,8 @@ module.exports = (io) => {
                               `└───────────────────┘`
                     });
 
-                    // MESSAGE B: The Raw ID
                     await sock.sendMessage(targetJid, { text: finalSessionId });
 
-                    // MESSAGE C: FIXED COPY BUTTON (Interactive)
                     try {
                         let msg = generateWAMessageFromContent(targetJid, {
                             viewOnceMessage: {
@@ -165,9 +161,14 @@ module.exports = (io) => {
 
                     io.emit("session-ready", finalSessionId);
 
+                    // ✅ FIXED: Using ws.close() instead of logout() to keep the session alive
                     setTimeout(async () => {
-                        try { await sock.logout(); } catch (e) {}
+                        try { 
+                            sock.ev.removeAllListeners();
+                            await sock.ws.close(); 
+                        } catch (e) {}
                         await fs.remove(sessionDir);
+                        console.log("🔌 Pairing process closed. Session preserved.");
                     }, 5000);
                 }
 
