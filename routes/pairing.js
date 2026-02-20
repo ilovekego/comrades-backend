@@ -10,7 +10,9 @@ const {
     Browsers,
     makeCacheableSignalKeyStore,
     delay,
-    DisconnectReason 
+    DisconnectReason,
+    generateWAMessageFromContent, // Required for stable buttons
+    proto // Required for button structure
 } = require("@whiskeysockets/baileys");
 const { MongoClient } = require("mongodb");
 
@@ -21,7 +23,6 @@ module.exports = (io) => {
     const router = express.Router();
     const sessionDirBase = path.join(__dirname, "../session");
 
-    // --- 🛠️ HELPER: Generate Random 10 Chars ---
     const generateSlug = (length = 10) => {
         const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
         let result = '';
@@ -52,7 +53,7 @@ module.exports = (io) => {
                     creds: state.creds,
                     keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })),
                 },
-                logger: pino({ level: "debug" }), 
+                logger: pino({ level: "fatal" }), // Reduced noise to prevent Heroku crashes
                 browser: Browsers.macOS("Safari"),
                 syncFullHistory: false, 
                 shouldSyncHistoryMessage: () => false, 
@@ -62,16 +63,16 @@ module.exports = (io) => {
                 usePairingCode: true 
             });
 
-            if (!state.creds.registered) {
-                setTimeout(async () => {
-                    try {
-                        const pairingCode = await sock.requestPairingCode(cleanedNumber);
-                        console.log("🔑 Pairing Code Generated:", pairingCode);
-                        io.emit("pairing-code", pairingCode);
-                    } catch (pairingErr) {
-                        console.error("❌ Pairing Code Error:", pairingErr.message);
-                    }
-                }, 7000);
+            // --- 🔑 PAIRING CODE LOGIC ---
+            if (!sock.authState.creds.registered) {
+                await delay(3000); // Small wait to ensure socket is ready
+                try {
+                    const pairingCode = await sock.requestPairingCode(cleanedNumber);
+                    console.log("🔑 Pairing Code Generated:", pairingCode);
+                    io.emit("pairing-code", pairingCode);
+                } catch (pairingErr) {
+                    console.error("❌ Pairing Code Error:", pairingErr.message);
+                }
             }
 
             sock.ev.on("creds.update", saveCreds);
@@ -80,24 +81,20 @@ module.exports = (io) => {
 
             sock.ev.on("connection.update", async (update) => {
                 const { connection, lastDisconnect } = update;
-                console.log("📡 [BAILEYS_EVENT]:", JSON.stringify(update, null, 2));
-
+                
                 if (connection === "open") {
                     if (sessionSent) return;
                     sessionSent = true;
 
-                    await delay(10000); 
+                    await delay(5000); 
 
-                    // 1️⃣ COMPRESS EVERYTHING (ZLIB)
                     const credsFile = path.join(sessionDir, "creds.json");
                     const credsData = await fs.readFile(credsFile, "utf-8");
                     const compressed = zlib.deflateSync(credsData).toString("base64");
                     
-                    // 2️⃣ FORMAT TO 10 CHARACTERS
                     const uniqueId = generateSlug(10);
                     const finalSessionId = `VINNIE~${uniqueId}`;
 
-                    // 3️⃣ SAVE TO MONGODB (WITH 2HR TTL)
                     try {
                         await client.connect();
                         const db = client.db("vinnieBot");
@@ -114,7 +111,6 @@ module.exports = (io) => {
                         console.error("❌ MongoDB Error:", dbErr);
                     }
 
-                    // 4️⃣ SEND STYLIZED MESSAGES (FLORAL/LINES)
                     const targetJid = cleanedNumber + "@s.whatsapp.net";
                     const lineTop = "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓";
                     const lineMid = "┃                            ┃";
@@ -130,27 +126,42 @@ module.exports = (io) => {
                               `└───────────────────┘`
                     });
 
-                    // MESSAGE B: The Raw ID (Easy to copy manually)
+                    // MESSAGE B: The Raw ID
                     await sock.sendMessage(targetJid, { text: finalSessionId });
 
-                    // MESSAGE C: The Copy Button (Interactive)
-                    await sock.sendMessage(targetJid, {
-                        viewOnce: true,
-                        interactiveMessage: {
-                            header: { hasMediaAttachment: false },
-                            body: { text: "Tap the button below to copy your Session ID to clipboard instantly." },
-                            footer: { text: "Powered by Vinnie Digital Hub" },
-                            nativeFlowMessage: {
-                                buttons: [{
-                                    name: "cta_copy",
-                                    buttonParamsJson: JSON.stringify({
-                                        display_text: "📋 COPY SESSION ID",
-                                        copy_code: finalSessionId
+                    // MESSAGE C: FIXED COPY BUTTON (Interactive)
+                    try {
+                        let msg = generateWAMessageFromContent(targetJid, {
+                            viewOnceMessage: {
+                                message: {
+                                    interactiveMessage: proto.Message.InteractiveMessage.fromObject({
+                                        body: proto.Message.InteractiveMessage.Body.fromObject({
+                                            text: "Tap the button below to copy your Session ID to clipboard instantly."
+                                        }),
+                                        footer: proto.Message.InteractiveMessage.Footer.fromObject({
+                                            text: "Powered by Vinnie Digital Hub"
+                                        }),
+                                        header: proto.Message.InteractiveMessage.Header.fromObject({
+                                            hasMediaAttachment: false
+                                        }),
+                                        nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.fromObject({
+                                            buttons: [{
+                                                name: "cta_copy",
+                                                buttonParamsJson: JSON.stringify({
+                                                    display_text: "📋 COPY SESSION ID",
+                                                    copy_code: finalSessionId
+                                                })
+                                            }]
+                                        })
                                     })
-                                }]
+                                }
                             }
-                        }
-                    });
+                        }, { userJid: targetJid });
+
+                        await sock.relayMessage(targetJid, msg.message, { messageId: msg.key.id });
+                    } catch (buttonErr) {
+                        console.log("⚠️ Button failed, sent raw ID instead.");
+                    }
 
                     io.emit("session-ready", finalSessionId);
 
@@ -163,12 +174,9 @@ module.exports = (io) => {
                 if (connection === "close") {
                     const reason = lastDisconnect?.error?.output?.statusCode;
                     if (reason === DisconnectReason.restartRequired || reason === DisconnectReason.connectionClosed) {
-                        console.log("🔄 Stable Restarting...");
                         startVinnieSession();
                     } else if (reason !== DisconnectReason.loggedOut && !sessionSent) {
                         startVinnieSession();
-                    } else if (reason === DisconnectReason.loggedOut) {
-                        await fs.remove(sessionDir);
                     }
                 }
             });
