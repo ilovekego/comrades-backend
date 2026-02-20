@@ -1,23 +1,29 @@
+<<<<<<< HEAD
 const { default: makeWASocket, useMultiFileAuthState, delay, fetchLatestBaileysVersion, Browsers, DisconnectReason, makeCacheableSignalKeyStore } = require("@whiskeysockets/baileys");
+=======
+require('dotenv').config();
+>>>>>>> 84b6417 (Sticker added)
 const express = require('express');
 const http = require('http');
-const { Server } = require("socket.io");
-const fs = require('fs-extra');
+const { Server } = require('socket.io');
 const path = require('path');
-const pino = require('pino');
-const QRCode = require('qrcode');
+
+const qrRoute = require('./routes/qr');
+const pairingRoute = require('./routes/pairing');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { 
-    cors: { origin: "*", methods: ["GET", "POST"] } 
-});
 
+<<<<<<< HEAD
+=======
+// Socket.io
+const io = new Server(server, { cors: { origin: "*" } });
+
+// Serve frontend (local)
+>>>>>>> 84b6417 (Sticker added)
 app.use(express.static(path.join(__dirname, 'public')));
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
 
+<<<<<<< HEAD
 const statsFile = path.join(__dirname, 'total_stats.json');
 if (!fs.existsSync(statsFile)) fs.writeJsonSync(statsFile, { total: 0 });
 
@@ -225,3 +231,24 @@ server.listen(port, () => {
     console.log(`Backend Robustly Running: http://localhost:${port}`);
     console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
 });
+=======
+// Body parser for POST
+app.use(express.json());
+
+// Routes
+app.use('/start-qr', qrRoute(io));
+app.use('/start-pairing', pairingRoute(io));
+
+// Test endpoint
+app.get('/', (req, res) => res.send('Vinnie Bot Generator Running...'));
+
+// Socket logging
+io.on('connection', (socket) => {
+    console.log(`📡 Frontend client connected: ${socket.id}`);
+    socket.on('disconnect', () => console.log(`📴 Frontend client disconnected: ${socket.id}`));
+});
+
+// Port binding
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`🌍 Server running on port ${PORT}`));
+>>>>>>> 84b6417 (Sticker added)
