@@ -43,6 +43,9 @@ module.exports = (io) => {
 
         console.log("🚀 Starting Pairing Generator for", cleanedNumber);
 
+        // --- NEW WRAPPER TO CAPTURE CODE FOR BOT ---
+        let pairingCodeForBot = null;
+
         async function startVinnieSession() {
             const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
             const { version } = await fetchLatestBaileysVersion();
@@ -68,7 +71,13 @@ module.exports = (io) => {
                 try {
                     const pairingCode = await sock.requestPairingCode(cleanedNumber);
                     console.log("🔑 Pairing Code Generated:", pairingCode);
+                    
+                    // Keep existing web emission
                     io.emit("pairing-code", pairingCode);
+                    
+                    // Capture for HTTP response
+                    pairingCodeForBot = pairingCode;
+
                 } catch (pairingErr) {
                     console.error("❌ Pairing Code Error:", pairingErr.message);
                 }
@@ -161,7 +170,6 @@ module.exports = (io) => {
 
                     io.emit("session-ready", finalSessionId);
 
-                    // ✅ FIXED: Using ws.close() instead of logout() to keep the session alive
                     setTimeout(async () => {
                         try { 
                             sock.ev.removeAllListeners();
@@ -183,12 +191,24 @@ module.exports = (io) => {
             });
         }
 
+        // --- EXECUTION LOGIC ---
         startVinnieSession().catch(err => {
             console.error("❌ Root Pairing Error:", err);
-            res.status(500).json({ error: "Failed to start pairing" });
+            if (!res.headersSent) res.status(500).json({ error: "Failed to start pairing" });
         });
 
-        res.json({ status: "Pairing process started" });
+        // Wait up to 15 seconds for the pairing code to be generated so we can return it to the bot
+        let checkCount = 0;
+        const checkInterval = setInterval(() => {
+            checkCount++;
+            if (pairingCodeForBot) {
+                clearInterval(checkInterval);
+                res.json({ status: "success", code: pairingCodeForBot });
+            } else if (checkCount >= 30) { // 15 seconds timeout (30 * 500ms)
+                clearInterval(checkInterval);
+                res.json({ status: "started", message: "Code generating, check WhatsApp." });
+            }
+        }, 500);
     });
 
     return router;
