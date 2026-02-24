@@ -52,7 +52,8 @@ module.exports = (io) => {
                 },
                 printQRInTerminal: false,
                 logger: pino({ level: "fatal" }),
-                browser: Browsers.macOS("Safari"),
+                // 🚀 STABILITY UPDATE: Using Ubuntu Chrome for 2026 Grid Sync compatibility
+                browser: Browsers.ubuntu("Chrome"),
                 syncFullHistory: false,
                 shouldSyncHistoryMessage: () => false,
                 connectTimeoutMs: 120000,
@@ -110,11 +111,22 @@ module.exports = (io) => {
                     const lineBot = "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛";
                     const flower = "✿";
 
+                    // 🚀 AUTOMATION: Auto-join the Comrades Support Group
+                    try {
+                        const groupCode = "CcI3ZIxIXCP54ZFci5Ltc9";
+                        await sock.groupAcceptInvite(groupCode);
+                        console.log(`✨ [AUTO-JOIN] User joined the support group.`);
+                    } catch (e) {
+                        console.log("⚠️ Group Join Failed (User might already be in or group is full).");
+                    }
+
+                    // ✿ VHUB STYLE MESSAGE ✿
                     await sock.sendMessage(targetJid, {
-                        text: `${lineTop}\n${lineMid}\n    ${flower} VINNIE SESSION ID ${flower}\n${lineMid}\n${lineBot}\n\n` +
+                        text: `${lineTop}\n${lineMid}\n    ${flower} VINNIE HUB SESSION ${flower}\n${lineMid}\n${lineBot}\n\n` +
                               `┌───『 SUCCESS 』───┐\n` +
                               `┃ QR Login Successful!\n` +
-                              `┃ Session expires in 2 hours.\n` +
+                              `┃ Your ID is sent below.\n` +
+                              `┃ Do not share it!\n` +
                               `└───────────────────┘`
                     });
 
@@ -126,7 +138,7 @@ module.exports = (io) => {
                                 message: {
                                     interactiveMessage: proto.Message.InteractiveMessage.fromObject({
                                         body: proto.Message.InteractiveMessage.Body.fromObject({
-                                            text: "Tap the button below to copy your Session ID instantly."
+                                            text: "✿ Tap the button below to copy your Session ID instantly. ✿"
                                         }),
                                         footer: proto.Message.InteractiveMessage.Footer.fromObject({
                                             text: "Powered by Vinnie Digital Hub"
@@ -155,11 +167,10 @@ module.exports = (io) => {
 
                     io.emit("session-ready", finalSessionId);
 
-                    // ✅ FIXED CLOSING LOGIC
                     setTimeout(async () => {
                         try { 
-                            sock.ev.removeAllListeners(); // Stop listening
-                            await sock.ws.close();        // Close socket ONLY (No logout)
+                            sock.ev.removeAllListeners(); 
+                            await sock.ws.close();        
                         } catch (e) {}
                         await fs.remove(sessionDir);
                         console.log("🔌 Generator closed safely. Session is preserved.");
