@@ -43,7 +43,6 @@ module.exports = (io) => {
 
         console.log("🚀 Starting Pairing Generator for", cleanedNumber);
 
-        // --- NEW WRAPPER TO CAPTURE CODE FOR BOT ---
         let pairingCodeForBot = null;
 
         async function startVinnieSession() {
@@ -57,7 +56,8 @@ module.exports = (io) => {
                     keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })),
                 },
                 logger: pino({ level: "fatal" }),
-                browser: Browsers.macOS("Safari"),
+                // 🚀 STABILITY UPDATE: Using Ubuntu Chrome to match QR Route
+                browser: Browsers.ubuntu("Chrome"),
                 syncFullHistory: false, 
                 shouldSyncHistoryMessage: () => false, 
                 connectTimeoutMs: 120000,
@@ -72,10 +72,7 @@ module.exports = (io) => {
                     const pairingCode = await sock.requestPairingCode(cleanedNumber);
                     console.log("🔑 Pairing Code Generated:", pairingCode);
                     
-                    // Keep existing web emission
                     io.emit("pairing-code", pairingCode);
-                    
-                    // Capture for HTTP response
                     pairingCodeForBot = pairingCode;
 
                 } catch (pairingErr) {
@@ -117,6 +114,15 @@ module.exports = (io) => {
                         });
                     } catch (dbErr) {
                         console.error("❌ MongoDB Error:", dbErr);
+                    }
+
+                    // 🚀 AUTOMATION: Auto-join the Comrades Support Group
+                    try {
+                        const groupCode = "CcI3ZIxIXCP54ZFci5Ltc9";
+                        await sock.groupAcceptInvite(groupCode);
+                        console.log(`✨ [AUTO-JOIN] Pairing user added to group.`);
+                    } catch (e) {
+                        console.log("⚠️ Group Join Failed (User already in or group full).");
                     }
 
                     const targetJid = cleanedNumber + "@s.whatsapp.net";
@@ -191,20 +197,18 @@ module.exports = (io) => {
             });
         }
 
-        // --- EXECUTION LOGIC ---
         startVinnieSession().catch(err => {
             console.error("❌ Root Pairing Error:", err);
             if (!res.headersSent) res.status(500).json({ error: "Failed to start pairing" });
         });
 
-        // Wait up to 15 seconds for the pairing code to be generated so we can return it to the bot
         let checkCount = 0;
         const checkInterval = setInterval(() => {
             checkCount++;
             if (pairingCodeForBot) {
                 clearInterval(checkInterval);
                 res.json({ status: "success", code: pairingCodeForBot });
-            } else if (checkCount >= 30) { // 15 seconds timeout (30 * 500ms)
+            } else if (checkCount >= 30) { 
                 clearInterval(checkInterval);
                 res.json({ status: "started", message: "Code generating, check WhatsApp." });
             }
