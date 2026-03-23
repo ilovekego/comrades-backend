@@ -1,8 +1,10 @@
-const express = require("express");
-const path = require("path");
-const fs = require("fs-extra");
-const pino = require("pino");
-const zlib = require("zlib");
+import express from "express";
+import path from "path";
+import fs from "fs-extra";
+import pino from "pino";
+import zlib from "zlib";
+import { fileURLToPath } from 'url';
+import baileys from "@whiskeysockets/baileys";
 const {
     default: giftedConnect,
     useMultiFileAuthState,
@@ -13,13 +15,17 @@ const {
     DisconnectReason,
     generateWAMessageFromContent,
     proto 
-} = require("@whiskeysockets/baileys");
-const { MongoClient } = require("mongodb");
+} = baileys;
+import { MongoClient } from "mongodb";
+
+// ESM fix for __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const mongoUri = process.env.MONGO_URI;
 const client = new MongoClient(mongoUri);
 
-module.exports = (io) => {
+export default (io) => {
     const router = express.Router();
     const sessionDirBase = path.join(__dirname, "../session");
 
@@ -63,7 +69,8 @@ module.exports = (io) => {
                 connectTimeoutMs: 120000,
                 defaultQueryTimeoutMs: 0,
                 keepAliveIntervalMs: 30000,
-                usePairingCode: true 
+                usePairingCode: true,
+                shouldSyncLidPnMappings: true // v7 Requirement
             });
 
             if (!sock.authState.creds.registered) {
