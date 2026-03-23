@@ -1,13 +1,18 @@
-require('dotenv').config();
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const path = require('path');
-const cors = require('cors');
+import 'dotenv/config';
+import express from 'express';
+import http from 'http';
+import { Server } from 'socket.io';
+import path from 'path';
+import cors from 'cors';
+import { fileURLToPath } from 'url';
 
-// Import your route-based logic
-const qrRoute = require('./routes/qr');
-const pairingRoute = require('./routes/pairing');
+// --- ESM FIX FOR __dirname ---
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// --- IMPORT ROUTES (Note the .js extension is REQUIRED in ESM) ---
+import qrRoute from './routes/qr.js';
+import pairingRoute from './routes/pairing.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -54,7 +59,7 @@ io.on('connection', (socket) => {
 app.use('/start-qr', qrRoute(io));
 app.use('/start-pairing', pairingRoute(io));
 
-// Test Endpoint (The one you see in your screenshot)
+// Test Endpoint
 app.get('/', (req, res) => {
     res.status(200).send('Vinnie Bot Generator Running...');
 });
