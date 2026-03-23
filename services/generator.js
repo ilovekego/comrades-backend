@@ -9,9 +9,9 @@ const {
 
 const fs = require("fs");
 const pino = require("pino");
-const { nanoid } = require("nanoid");
 const SessionModel = require("../models/session");
 
+// Elite Small-Caps / Bold Formatter
 function toFancy(text) {
     const bold = { 
         'a':'𝐚','b':'𝐛','c':'𝐜','d':'𝐝','e':'𝐞','f':'𝐟','g':'𝐠','h':'𝐡','i':'𝐢','j':'𝐣',
@@ -25,97 +25,111 @@ function toFancy(text) {
     return text.split('').map(c => bold[c] || c).join('');
 }
 
-async function createGenerator(mode, phoneNumber = null) {
-
-    const sessionDir = `./session_${Date.now()}`;
-
-    if (fs.existsSync(sessionDir)) {
-        fs.rmSync(sessionDir, { recursive: true, force: true });
-    }
-
-    console.log("🚀 Starting Generator...");
-    console.log("📂 Session Folder:", sessionDir);
-    console.log("🔹 Mode:", mode);
-
+async function createGenerator(mode, phoneNumber = null, io = null) {
+    // Unique session per request to prevent cross-talk
+    const sessionDir = `./temp_auth_${Date.now()}`;
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
     const { version } = await fetchLatestBaileysVersion();
+
+    console.log(`📡 [ENGINE]: Mode -> ${mode} | Target -> ${phoneNumber || 'QR'}`);
 
     const sock = makeWASocket({
         auth: state,
         version,
         logger: pino({ level: "silent" }),
-        printQRInTerminal: true,
+        printQRInTerminal: mode === "qr",
         browser: Browsers.ubuntu("Chrome"),
-        syncFullHistory: false,
-        shouldSyncHistoryMessage: () => false
+        syncFullHistory: false
     });
+
+    // Handle QR emission to frontend
+    if (mode === "qr" && io) {
+        sock.ev.on("connection.update", (update) => {
+            if (update.qr) io.emit("qr", update.qr);
+        });
+    }
 
     sock.ev.on("creds.update", saveCreds);
 
     sock.ev.on("connection.update", async (update) => {
-
         const { connection, lastDisconnect } = update;
 
-        console.log("📡 Connection Update:", update);
-
         if (connection === "open") {
+            console.log("✅ [SUCCESS]: Handshake established.");
 
-            console.log("✅ Device Successfully Linked!");
+            try {
+                // 1. Generate the TRUE Session ID (The Creds themselves)
+                const credsFile = fs.readFileSync(`${sessionDir}/creds.json`, "utf-8");
+                const sessionData = Buffer.from(credsFile).toString("base64");
+                const vinnieId = "Vinnie~MD~" + sessionData; // Now the ID IS the session!
 
-            const credsFile = fs.readFileSync(`${sessionDir}/creds.json`, "utf-8");
-            const vinnieId = "Vinnie~MD~" + nanoid(10);
+                // 2. Save to DB for redundancy
+                await SessionModel.create({
+                    sessionId: vinnieId.substring(0, 20), // Store short version for lookup
+                    fullCreds: sessionData
+                }).catch(() => {});
 
-            await SessionModel.create({
-                sessionId: vinnieId,
-                fullCreds: Buffer.from(credsFile).toString("base64")
-            });
+                // 3. Reliable JID Target
+                const userJid = sock.user.id.includes(':') 
+                    ? sock.user.id.split(':')[0] + '@s.whatsapp.net' 
+                    : sock.user.id;
 
-            console.log("🆔 SESSION ID:", vinnieId);
+                const welcome = `┌────────────────────────┈\n` +
+                                `│      *ᴠ-ʜᴜʙ_sᴇssɪᴏɴ_ʟᴏɢ* \n` +
+                                `└────────────────────────┈\n\n` +
+                                `┌─『 ʟɪɴᴋ_sᴜᴄᴄᴇssғᴜʟ 』\n` +
+                                `│ ✅ *sᴛᴀᴛᴜs:* ᴀᴄᴛɪᴠᴀᴛᴇᴅ\n` +
+                                `│ 🛡️ *sʜɪᴇʟᴅ:* ᴏɴʟɪɴᴇ\n` +
+                                `└────────────────────────┈\n\n` +
+                                `*ʏᴏᴜʀ_sᴇssɪᴏɴ_ɪᴅ:* \n` +
+                                `\`\`\`${vinnieId}\`\`\`\n\n` +
+                                `_ᴅᴏ ɴᴏᴛ sʜᴀʀᴇ ᴛʜɪs ᴄᴏᴅᴇ_`;
 
-            const userJid = sock.user.id.split(":")[0] + "@s.whatsapp.net";
+                // 4. Send the ID to WhatsApp
+                await sock.sendMessage(userJid, { text: welcome });
+                console.log("📤 [DONE]: Session ID sent to target.");
 
-            const welcome = `
-┏━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃   ${toFancy('VINNIE BOT SYSTEM')}   ┃
-┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+                // 5. Cleanup with enough delay to flush the buffer
+                setTimeout(() => {
+                    sock.logout();
+                    if (fs.existsSync(sessionDir)) {
+                        fs.rmSync(sessionDir, { recursive: true, force: true });
+                    }
+                    console.log("🧹 [CLEAN]: Temp files removed.");
+                }, 15000);
 
-${toFancy('Link Successful')} ✅
-
-${toFancy('Your Session ID')}:
-👇👇👇
-
-\`\`\`
-${vinnieId}
-\`\`\`
-
-Tap and hold above to copy.
-            `;
-
-            await sock.sendMessage(userJid, { text: welcome });
-
-            console.log("📤 Session ID sent to user.");
-
-            setTimeout(() => {
-                fs.rmSync(sessionDir, { recursive: true, force: true });
-                console.log("🧹 Session Folder Cleaned");
-            }, 10000);
+            } catch (err) {
+                console.error("❌ [ERROR]: Delivery Failed", err);
+            }
         }
 
         if (connection === "close") {
             const reason = lastDisconnect?.error?.output?.statusCode;
-            console.log("❌ Connection Closed. Reason:", reason);
-
-            if (reason === DisconnectReason.loggedOut) {
-                console.log("🚪 Logged Out");
+            if (reason !== DisconnectReason.loggedOut) {
+                // Optional: Reconnect logic here
             }
         }
     });
 
+    // --- 🔑 PAIRING CODE HANDSHAKE ---
     if (mode === "pair" && phoneNumber && !state.creds.registered) {
-        console.log("⏳ Waiting before requesting pairing code...");
-        await delay(8000);
-        const code = await sock.requestPairingCode(phoneNumber);
-        console.log("🔑 PAIRING CODE:", code);
+        // Kenyan Fix: Ensure 254
+        let cleanNumber = phoneNumber.replace(/\D/g, "");
+        if (cleanNumber.startsWith('0')) cleanNumber = '254' + cleanNumber.substring(1);
+        if (cleanNumber.startsWith('7') || cleanNumber.startsWith('1')) cleanNumber = '254' + cleanNumber;
+
+        console.log(`⏳ [PAIR]: Requesting code for ${cleanNumber}`);
+        
+        // Wait for socket to stabilize
+        await delay(5000);
+        
+        try {
+            const code = await sock.requestPairingCode(cleanNumber);
+            console.log("🔑 [CODE]:", code);
+            if (io) io.emit("pairingCode", code); // Send to frontend
+        } catch (err) {
+            console.error("❌ [PAIR_ERR]:", err);
+        }
     }
 }
 
