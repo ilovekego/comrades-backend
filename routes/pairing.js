@@ -4,7 +4,7 @@ import fs from "fs-extra";
 import pino from "pino";
 import zlib from "zlib";
 import { fileURLToPath } from 'url';
-import baileys from "@whiskeysockets/baileys";
+import * as baileys from "@whiskeysockets/baileys"; // 🚀 Fixed Import Logic
 const {
     default: giftedConnect,
     useMultiFileAuthState,
