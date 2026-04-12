@@ -19,14 +19,9 @@ const {
     proto 
 } = baileys;
 
-import { MongoClient } from "mongodb";
-
 // ESM fix for __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-const mongoUri = process.env.MONGO_URI;
-const client = new MongoClient(mongoUri);
 
 export default (io) => {
     const router = express.Router();
@@ -95,24 +90,8 @@ export default (io) => {
                     const credsData = await fs.readFile(credsFile, "utf-8");
                     const compressed = zlib.deflateSync(credsData).toString("base64");
                     
-                    const uniqueId = generateSlug(10);
-                    const finalSessionId = `VINNIE~${uniqueId}`;
-
-                    try {
-                        await client.connect();
-                        const db = client.db("vinnieBot");
-                        const sessions = db.collection("sessions");
-                        await sessions.createIndex({ "createdAt": 1 }, { expireAfterSeconds: 7200 });
-
-                        await sessions.insertOne({
-                            sessionId: finalSessionId,
-                            data: compressed,
-                            createdAt: new Date(),
-                            status: "active"
-                        });
-                    } catch (dbErr) {
-                        console.error("❌ MongoDB Error:", dbErr);
-                    }
+                    // ✅ SUCCESS: Long zlib string for Vinnie Digital Hub
+                    const finalSessionId = `VINNIE~${compressed}`;
 
                     const targetJid = sock.user.id;
                     const lineTop = "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓";
