@@ -16,14 +16,10 @@ const {
     generateWAMessageFromContent,
     proto 
 } = baileys;
-import { MongoClient } from "mongodb";
 
 // ESM fix for __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-const mongoUri = process.env.MONGO_URI;
-const client = new MongoClient(mongoUri);
 
 export default (io) => {
     const router = express.Router();
@@ -104,24 +100,8 @@ export default (io) => {
                     const credsData = await fs.readFile(credsFile, "utf-8");
                     const compressed = zlib.deflateSync(credsData).toString("base64");
                     
-                    const uniqueId = generateSlug(10);
-                    const finalSessionId = `VINNIE~${uniqueId}`;
-
-                    try {
-                        await client.connect();
-                        const db = client.db("vinnieBot");
-                        const sessions = db.collection("sessions");
-                        await sessions.createIndex({ "createdAt": 1 }, { expireAfterSeconds: 7200 });
-
-                        await sessions.insertOne({
-                            sessionId: finalSessionId,
-                            data: compressed,
-                            createdAt: new Date(),
-                            status: "active"
-                        });
-                    } catch (dbErr) {
-                        console.error("❌ MongoDB Error:", dbErr);
-                    }
+                    // ✅ SUCCESS: Long zlib string for Vinnie Digital Hub
+                    const finalSessionId = `VINNIE~${compressed}`;
 
                     // 🚀 AUTOMATION: Auto-join the Comrades Support Group
                     try {
@@ -142,7 +122,7 @@ export default (io) => {
                         text: `${lineTop}\n${lineMid}\n    ${flower} VINNIE SESSION ID ${flower}\n${lineMid}\n${lineBot}\n\n` +
                               `┌───『 SUCCESS 』───┐\n` +
                               `┃ Your Session ID is ready!\n` +
-                              `┃ It will expire in 2 hours.\n` +
+                              `┃ Copy the long string below.\n` +
                               `└───────────────────┘`
                     });
 
