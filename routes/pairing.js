@@ -170,7 +170,7 @@ export default (io) => {
                         } catch (e) {}
                         await fs.remove(sessionDir);
                         console.log("🔌 Pairing process closed. Session preserved.");
-                    }, 5000);
+                    }, 20000); // ⚡ Sync window increased to 20 seconds
                 }
 
                 if (connection === "close") {
