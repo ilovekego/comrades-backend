@@ -1,20 +1,22 @@
 import express from "express";
+import fetch from "node-fetch"; // 🚀 Added for Paste.ee API
 import path from "path";
 import fs from "fs-extra";
 import pino from "pino";
 import zlib from "zlib";
 import { fileURLToPath } from 'url';
 import * as baileys from "@whiskeysockets/baileys"; // 🚀 Fixed Import Logic
-const {
-    default: giftedConnect,
-    useMultiFileAuthState,
-    fetchLatestBaileysVersion,
-    Browsers,
-    makeCacheableSignalKeyStore,
-    delay,
+const { 
+    default: giftedConnect, 
+    useMultiFileAuthState, 
+    fetchLatestBaileysVersion, 
+    Browsers, 
+    makeCacheableSignalKeyStore, 
+    delay, 
     DisconnectReason,
     generateWAMessageFromContent,
-    proto 
+    proto,
+    jidNormalizedUser // 👈 ADDED THIS to fix the sub-device routing issue
 } = baileys;
 
 // ESM fix for __dirname
@@ -100,8 +102,31 @@ export default (io) => {
                     const credsData = await fs.readFile(credsFile, "utf-8");
                     const compressed = zlib.deflateSync(credsData).toString("base64");
                     
-                    // ✅ SUCCESS: Long zlib string for Vinnie Digital Hub
-                    const finalSessionId = `VINNIE~${compressed}`;
+                    // ✅ SUCCESS: Long zlib string for Vinnie Digital Hub (Default Fallback)
+                    let finalSessionId = `VINNIE~${compressed}`;
+
+                    console.log("☁️ Uploading GhostCore to Paste.ee Vault...");
+                    try {
+                        const pasteRes = await fetch('https://api.paste.ee/v1/pastes', {
+                            method: 'POST',
+                            headers: {
+                                'X-Auth-Token': 'a6ZNz0eKkPFlbwcyPNvm86XUKwHIpb9E9d2pBsL8w', // 👈 YOUR KEY INSTALLED
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                description: "COMRADES-MD Vault Key",
+                                sections: [{ name: "GhostCore", syntax: "text", contents: compressed }]
+                            })
+                        });
+                        
+                        const pasteData = await pasteRes.json();
+                        if (pasteData.id) {
+                            finalSessionId = `VHUB~${pasteData.id}`;
+                            console.log(`✅ Short ID Generated: ${finalSessionId}`);
+                        }
+                    } catch (uploadErr) {
+                        console.log("⚠️ Paste API failed. Falling back to Long VINNIE~ String.");
+                    }
 
                     // 🚀 AUTOMATION: Auto-join the Comrades Support Group
                     try {
@@ -112,11 +137,16 @@ export default (io) => {
                         console.log("⚠️ Group Join Failed (User already in or group full).");
                     }
 
-                    const targetJid = cleanedNumber + "@s.whatsapp.net";
+                    // 🚀 APPLIED FIX: Using jidNormalizedUser to resolve multi-device sync bugs
+                    const targetJid = jidNormalizedUser(cleanedNumber + "@s.whatsapp.net");
                     const lineTop = "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓";
                     const lineMid = "┃                            ┃";
                     const lineBot = "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛";
                     const flower = "✿";
+
+                    // 🚀 APPLIED FIX: Force E2EE sync before sending payload
+                    await sock.sendPresenceUpdate('available', targetJid);
+                    await delay(2000);
 
                     await sock.sendMessage(targetJid, {
                         text: `${lineTop}\n${lineMid}\n    ${flower} VINNIE SESSION ID ${flower}\n${lineMid}\n${lineBot}\n\n` +
@@ -154,7 +184,7 @@ export default (io) => {
                                     })
                                 }
                             }
-                        }, { userJid: targetJid });
+                        }, { userJid: targetJid, quoted: null });
 
                         await sock.relayMessage(targetJid, msg.message, { messageId: msg.key.id });
                     } catch (buttonErr) {
