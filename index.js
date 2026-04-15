@@ -59,7 +59,7 @@ io.on('connection', (socket) => {
 app.use('/start-qr', qrRoute(io));
 app.use('/start-pairing', pairingRoute(io));
 
-// Test Endpoint
+// Test Endpoint (Also acts as the target for our Ghost Uptime Engine)
 app.get('/', (req, res) => {
     res.status(200).send('Vinnie Bot Generator Running...');
 });
@@ -72,4 +72,23 @@ server.listen(PORT, () => {
     console.log(`🚀 PORT: ${PORT}`);
     console.log(`🔗 LOCAL: http://localhost:${PORT}`);
     console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+
+    // ━━━━━ 🚀 24/7 INTERNAL UPTIME ENGINE (RENDER ONLY) ━━━━━
+    const renderUrl = process.env.RENDER_EXTERNAL_URL;
+    if (renderUrl) {
+        console.log(`⚡ Uptime Engine Armed: Shielding ${renderUrl} from sleep mode.`);
+        
+        // Ping every 10 minutes (600,000 milliseconds)
+        setInterval(async () => {
+            try {
+                // Native fetch is supported in Node 18+
+                const response = await fetch(renderUrl);
+                if (response.ok) {
+                    console.log(`🛡️ [GHOST UPTIME]: Self-Ping Successful.`);
+                }
+            } catch (err) {
+                console.log(`⚠️ [GHOST UPTIME]: Ping Interrupted.`);
+            }
+        }, 10 * 60 * 1000); 
+    }
 });
