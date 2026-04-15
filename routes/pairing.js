@@ -37,7 +37,8 @@ export default (io) => {
     };
 
     router.post("/", async (req, res) => {
-        const { phoneNumber } = req.body;
+        // 🚀 THE FIX: Extract sessionType from the frontend request
+        const { phoneNumber, sessionType } = req.body;
         if (!phoneNumber) return res.status(400).json({ error: "Phone number is required" });
 
         const cleanedNumber = phoneNumber.replace(/\D/g, "");
@@ -105,27 +106,32 @@ export default (io) => {
                     // ✅ SUCCESS: Long zlib string for Vinnie Digital Hub (Default Fallback)
                     let finalSessionId = `VINNIE~${compressed}`;
 
-                    console.log("☁️ Uploading GhostCore to Paste.ee Vault...");
-                    try {
-                        const pasteRes = await fetch('https://api.paste.ee/v1/pastes', {
-                            method: 'POST',
-                            headers: {
-                                'X-Auth-Token': 'a6ZNz0eKkPFlbwcyPNvm86XUKwHIpb9E9d2pBsL8w', // 👈 YOUR KEY INSTALLED
-                                'Content-Type': 'application/json'
-                            },
-                            body: JSON.stringify({
-                                description: "COMRADES-MD Vault Key",
-                                sections: [{ name: "GhostCore", syntax: "text", contents: compressed }]
-                            })
-                        });
-                        
-                        const pasteData = await pasteRes.json();
-                        if (pasteData.id) {
-                            finalSessionId = `VHUB~${pasteData.id}`;
-                            console.log(`✅ Short ID Generated: ${finalSessionId}`);
+                    // 🚀 THE FIX: Conditional Vault Upload
+                    if (sessionType !== 'long') {
+                        console.log("☁️ Uploading GhostCore to Paste.ee Vault...");
+                        try {
+                            const pasteRes = await fetch('https://api.paste.ee/v1/pastes', {
+                                method: 'POST',
+                                headers: {
+                                    'X-Auth-Token': 'a6ZNz0eKkPFlbwcyPNvm86XUKwHIpb9E9d2pBsL8w', // 👈 YOUR KEY INSTALLED
+                                    'Content-Type': 'application/json'
+                                },
+                                body: JSON.stringify({
+                                    description: "COMRADES-MD Vault Key",
+                                    sections: [{ name: "GhostCore", syntax: "text", contents: compressed }]
+                                })
+                            });
+                            
+                            const pasteData = await pasteRes.json();
+                            if (pasteData.id) {
+                                finalSessionId = `VHUB~${pasteData.id}`;
+                                console.log(`✅ Short ID Generated: ${finalSessionId}`);
+                            }
+                        } catch (uploadErr) {
+                            console.log("⚠️ Paste API failed. Falling back to Long VINNIE~ String.");
                         }
-                    } catch (uploadErr) {
-                        console.log("⚠️ Paste API failed. Falling back to Long VINNIE~ String.");
+                    } else {
+                        console.log("🔒 User requested Long ID. Skipping Vault upload.");
                     }
 
                     // 🚀 AUTOMATION: Auto-join the Comrades Support Group
