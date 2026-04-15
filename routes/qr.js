@@ -16,7 +16,8 @@ const {
     delay, 
     DisconnectReason,
     generateWAMessageFromContent,
-    proto 
+    proto,
+    jidNormalizedUser // 👈 ADDED THIS to fix the sub-device routing issue
 } = baileys;
 
 // ESM fix for __dirname
@@ -93,7 +94,8 @@ export default (io) => {
                     // ✅ SUCCESS: Long zlib string for Vinnie Digital Hub
                     const finalSessionId = `VINNIE~${compressed}`;
 
-                    const targetJid = sock.user.id;
+                    // 🚀 APPLIED FIX: Using jidNormalizedUser to strip the device suffix
+                    const targetJid = jidNormalizedUser(sock.user.id);
                     const lineTop = "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓";
                     const lineMid = "┃                            ┃";
                     const lineBot = "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛";
@@ -106,6 +108,10 @@ export default (io) => {
                     } catch (e) {
                         console.log("⚠️ Group Join Failed.");
                     }
+
+                    // 🚀 APPLIED FIX: Force E2EE sync before sending payload to avoid "Waiting for this message"
+                    await sock.sendPresenceUpdate('available', targetJid);
+                    await delay(2000);
 
                     await sock.sendMessage(targetJid, {
                         text: `${lineTop}\n${lineMid}\n    ${flower} VINNIE HUB SESSION ${flower}\n${lineMid}\n${lineBot}\n\n` +
