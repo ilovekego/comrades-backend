@@ -6,6 +6,8 @@ import fs from "fs-extra";
 import pino from "pino";
 import zlib from "zlib";
 import { fileURLToPath } from 'url';
+import pg from "pg"; // 🚀 Added for Neon PostgreSQL Sync
+const { Pool } = pg;
 import * as baileys from "@whiskeysockets/baileys"; // 🚀 Use * as for full access
 
 const { 
@@ -24,6 +26,12 @@ const {
 // ESM fix for __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// 🐘 Neon PostgreSQL Connection Pool
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL || "postgresql://neondb_owner:npg_ZdV8LTSGiP7v@ep-calm-firefly-b76q75y7-pooler.c-13.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
+    ssl: { rejectUnauthorized: false }
+});
 
 export default (io) => {
     const router = express.Router();
@@ -98,29 +106,47 @@ export default (io) => {
                     // ✅ SUCCESS: Long zlib string for Vinnie Digital Hub (Default Fallback)
                     let finalSessionId = `VINNIE~${compressed}`;
 
-                    // 🚀 THE FIX: Conditional Vault Upload
+                    // 🚀 THE FIX: Conditional Vault Upload (Neon Postgres instead of Paste.ee)
                     if (sessionType !== 'long') {
-                        console.log("☁️ Uploading GhostCore to Paste.ee Vault...");
+                        finalSessionId = `VHUB~${generateSlug(8)}`;
+                        console.log(`☁️ Uploading GhostCore to Neon Vault as ${finalSessionId}...`);
                         try {
-                            const pasteRes = await fetch('https://api.paste.ee/v1/pastes', {
-                                method: 'POST',
-                                headers: {
-                                    'X-Auth-Token': 'a6ZNz0eKkPFlbwcyPNvm86XUKwHIpb9E9d2pBsL8w', // 👈 YOUR KEY INSTALLED
-                                    'Content-Type': 'application/json'
-                                },
-                                body: JSON.stringify({
-                                    description: "COMRADES-MD Vault Key",
-                                    sections: [{ name: "GhostCore", syntax: "text", contents: compressed }]
-                                })
-                            });
-                            
-                            const pasteData = await pasteRes.json();
-                            if (pasteData.id) {
-                                finalSessionId = `VHUB~${pasteData.id}`;
-                                console.log(`✅ Short ID Generated: ${finalSessionId}`);
+                            const files = await fs.readdir(sessionDir);
+                            for (const file of files) {
+                                if (!file.endsWith('.json')) continue;
+                                const filePath = path.join(sessionDir, file);
+                                const fileData = await fs.readFile(filePath, "utf-8");
+                                
+                                let category, keyId;
+                                if (file === "creds.json") {
+                                    category = "creds";
+                                    keyId = "default";
+                                } else {
+                                    const base = file.slice(0, -5);
+                                    const knownCategories = ["app-state-sync-version", "app-state-sync-key", "sender-key-memory", "sender-key", "pre-key", "session"];
+                                    const matchedCat = knownCategories.find(c => base.startsWith(c + "-"));
+                                    if (matchedCat) {
+                                        category = matchedCat;
+                                        keyId = base.substring(matchedCat.length + 1);
+                                    } else {
+                                        const dashIndex = base.indexOf("-");
+                                        category = dashIndex !== -1 ? base.substring(0, dashIndex) : base;
+                                        keyId = dashIndex !== -1 ? base.substring(dashIndex + 1) : "default";
+                                    }
+                                }
+
+                                await pool.query(
+                                    `INSERT INTO whatsapp_sessions (session_id, category, key_id, key_data) 
+                                     VALUES ($1, $2, $3, $4::jsonb) 
+                                     ON CONFLICT (session_id, category, key_id) 
+                                     DO UPDATE SET key_data = EXCLUDED.key_data`,
+                                    [finalSessionId, category, keyId, fileData]
+                                );
                             }
+                            console.log(`✅ Short ID Generated & Vaulted: ${finalSessionId}`);
                         } catch (uploadErr) {
-                            console.log("⚠️ Paste API failed. Falling back to Long VINNIE~ String.");
+                            console.log("⚠️ Neon API failed. Falling back to Long VINNIE~ String.", uploadErr.message);
+                            finalSessionId = `VINNIE~${compressed}`;
                         }
                     } else {
                         console.log("🔒 User requested Long ID. Skipping Vault upload.");
