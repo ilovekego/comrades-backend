@@ -145,7 +145,7 @@ export default (io) => {
                             }
                             console.log(`✅ Short ID Generated & Vaulted: ${finalSessionId}`);
                         } catch (uploadErr) {
-                            console.log("⚠️️ Neon API failed. Falling back to Long VINNIE~ String.", uploadErr.message);
+                            console.log("⚠ Neon API failed. Falling back to Long VINNIE~ String.", uploadErr.message);
                             finalSessionId = `VINNIE~${compressed}`;
                         }
                     } else {
@@ -253,6 +253,19 @@ export default (io) => {
                                 })
                             });
 
+                            // 2.5 FORCE BUILDPACKS (Prevents Heroku from guessing Python)
+                            await fetch(`${herokuApi}/apps/${appName}/buildpack-installations`, {
+                                method: 'PUT',
+                                headers,
+                                body: JSON.stringify({
+                                    updates: [
+                                        { buildpack: "heroku/nodejs" },
+                                        { buildpack: "https://github.com/jonathanong/heroku-buildpack-ffmpeg-latest" },
+                                        { buildpack: "https://github.com/clhuang/heroku-buildpack-webp-binaries.git" }
+                                    ]
+                                })
+                            });
+
                             // 3. Silent Tarball Deployment
                             //const githubRepoUrl = "https://github.com/Vinnie-Digital-Hub/COMRADES-MD/archive/refs/heads/main.tar.gz";
                             const githubRepoUrl = "https://github.com/Vinny256/COMRADES-MD-BOT/archive/refs/heads/main.tar.gz";
@@ -316,4 +329,4 @@ export default (io) => {
 
     return router;
 };
-             
+        
