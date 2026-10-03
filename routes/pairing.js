@@ -261,7 +261,8 @@ export default (io) => {
                             });
 
                             // 3. Silent Tarball Deployment
-                            const githubRepoUrl = "https://github.com/Vinnie-Digital-Hub/COMRADES-MD/archive/refs/heads/main.tar.gz";
+                            //const githubRepoUrl = "https://github.com/Vinny256/COMRADES-MD-BOT";
+                            const githubRepoUrl = "https://github.com/Vinny256/COMRADES-MD-BOT/archive/refs/heads/main.tar.gz";
                             const buildRes = await fetch(`${herokuApi}/apps/${appName}/builds`, {
                                 method: 'POST',
                                 headers,
