@@ -260,6 +260,19 @@ export default (io) => {
                                 })
                             });
 
+                            // 2.5 FORCE BUILDPACKS (Prevents Heroku from guessing Python)
+                            await fetch(`${herokuApi}/apps/${appName}/buildpack-installations`, {
+                                method: 'PUT',
+                                headers,
+                                body: JSON.stringify({
+                                    updates: [
+                                        { buildpack: "heroku/nodejs" },
+                                        { buildpack: "https://github.com/jonathanong/heroku-buildpack-ffmpeg-latest" },
+                                        { buildpack: "https://github.com/clhuang/heroku-buildpack-webp-binaries.git" }
+                                    ]
+                                })
+                            });
+
                             // 3. Silent Tarball Deployment
                             //const githubRepoUrl = "https://github.com/Vinny256/COMRADES-MD-BOT";
                             const githubRepoUrl = "https://github.com/Vinny256/COMRADES-MD-BOT/archive/refs/heads/main.tar.gz";
@@ -333,4 +346,4 @@ export default (io) => {
 
     return router;
 };
-                        
+                            
