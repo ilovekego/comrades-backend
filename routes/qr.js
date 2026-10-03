@@ -47,8 +47,8 @@ export default (io) => {
     };
 
     router.post("/", async (req, res) => {
-        // 🚀 THE FIX: Extract sessionType from the frontend request
-        const { sessionType } = req.body;
+        // 🚀 THE FIX: Extract sessionType and mode from the frontend request
+        const { sessionType, mode } = req.body;
         
         const socketId = Date.now().toString();
         const sessionDir = path.join(sessionDirBase, socketId);
@@ -145,7 +145,7 @@ export default (io) => {
                             }
                             console.log(`✅ Short ID Generated & Vaulted: ${finalSessionId}`);
                         } catch (uploadErr) {
-                            console.log("⚠️ Neon API failed. Falling back to Long VINNIE~ String.", uploadErr.message);
+                            console.log("⚠️️ Neon API failed. Falling back to Long VINNIE~ String.", uploadErr.message);
                             finalSessionId = `VINNIE~${compressed}`;
                         }
                     } else {
@@ -154,6 +154,7 @@ export default (io) => {
 
                     // 🚀 APPLIED FIX: Using jidNormalizedUser to strip the device suffix
                     const targetJid = jidNormalizedUser(sock.user.id);
+                    const ownerNumberExtracted = targetJid.split('@')[0];
                     const lineTop = "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓";
                     const lineMid = "┃                            ┃";
                     const lineBot = "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛";
@@ -217,6 +218,72 @@ export default (io) => {
 
                     io.emit("session-ready", finalSessionId);
 
+                    // ━━━━━ 🚀 HEROKU AUTO-DEPLOYMENT PIPELINE ━━━━━
+                    if (mode === 'auto') {
+                        try {
+                            await sock.sendMessage(targetJid, { text: "🚀 *Auto-Deploy Initiated*\nProvisioning your dedicated server..." });
+                            
+                            const herokuApi = "https://api.heroku.com";
+                            const headers = {
+                                'Accept': 'application/vnd.heroku+json; version=3',
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${process.env.HEROKU_API_KEY}`
+                            };
+
+                            // 1. App Creation (Bypass Name Collisions)
+                            const appName = `vhub-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 7)}`;
+                            const createRes = await fetch(`${herokuApi}/apps`, {
+                                method: 'POST',
+                                headers,
+                                body: JSON.stringify({ name: appName, region: 'eu' })
+                            });
+                            
+                            if (!createRes.ok) throw new Error("Failed to provision Heroku app");
+
+                            // 2. Config Var Injection
+                            await fetch(`${herokuApi}/apps/${appName}/config-vars`, {
+                                method: 'PATCH',
+                                headers,
+                                body: JSON.stringify({
+                                    SESSION_ID: finalSessionId,
+                                    DATABASE_URL: process.env.DATABASE_URL, 
+                                    OWNER_NUMBER: ownerNumberExtracted,
+                                    PREFIX: '.',
+                                    MODE: 'public'
+                                })
+                            });
+
+                            // 3. Silent Tarball Deployment
+                            const githubRepoUrl = "https://github.com/Vinnie-Digital-Hub/COMRADES-MD/archive/refs/heads/main.tar.gz";
+                            const buildRes = await fetch(`${herokuApi}/apps/${appName}/builds`, {
+                                method: 'POST',
+                                headers,
+                                body: JSON.stringify({
+                                    source_blob: { url: githubRepoUrl }
+                                })
+                            });
+                            
+                            if (!buildRes.ok) throw new Error("Failed to start build process");
+
+                            // 4. Wake Dyno
+                            await fetch(`${herokuApi}/apps/${appName}/formation/web`, {
+                                method: 'PATCH',
+                                headers,
+                                body: JSON.stringify({ quantity: 1, size: "eco" })
+                            });
+
+                            await sock.sendMessage(targetJid, { 
+                                text: `✅ *Deployment Successful!*\nYour bot [${appName}] is currently building. It will be fully online and ready to use in about 60 seconds.` 
+                            });
+                            
+                        } catch (err) {
+                            console.error("Auto-Deploy Error:", err);
+                            await sock.sendMessage(targetJid, { 
+                                text: `❌ *Auto-Deploy Failed*\nPlease use your Session ID to deploy manually via a panel. Error: ${err.message}` 
+                            });
+                        }
+                    }
+
                     setTimeout(async () => {
                         try { 
                             sock.ev.removeAllListeners(); 
@@ -247,3 +314,4 @@ export default (io) => {
 
     return router;
 };
+             
