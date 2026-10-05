@@ -259,7 +259,7 @@ export default (io) => {
                                     MODE: 'public',
                                     HEROKU_APP_NAME: appName,
                                     HEROKU_API_KEY: process.env.HEROKU_API_KEY,
-                                    CHANGELOG_URL: "YOUR_RAW_CHANGELOG_JSON_LINK_HERE"
+                                    CHANGELOG_URL: "https://gist.githubusercontent.com/ilovekego/301acc758d2b68b6cc981b67662e289d/raw/d776125a72dc5887fdf2c184a05ad8168dc2ec85/changelog.json"
                                 })
                             });
 
