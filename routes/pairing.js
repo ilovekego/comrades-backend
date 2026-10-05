@@ -45,8 +45,20 @@ export default (io) => {
     };
 
     router.post("/", async (req, res) => {
-        // 🚀 THE FIX: Extract sessionType and mode from the frontend request
-        const { phoneNumber, sessionType, mode } = req.body;
+        // 🚀 EXTRACT ALL FRONTEND SETTINGS & TOGGLES
+        const { 
+            phoneNumber, 
+            sessionType, 
+            mode, 
+            prefix, 
+            autobio, 
+            antilink, 
+            antimention, 
+            autoreact, 
+            autosave, 
+            typing, 
+            recording 
+        } = req.body;
         if (!phoneNumber) return res.status(400).json({ error: "Phone number is required" });
 
         const cleanedNumber = phoneNumber.replace(/\D/g, "");
@@ -247,16 +259,22 @@ export default (io) => {
                             
                             if (!createRes.ok) throw new Error("Failed to provision Heroku app");
 
-                            // 2. Config Var Injection
+                            // 2. Config Var Injection (Database URL removed, using bot fallback; all toggles and update keys injected)
                             await fetch(`${herokuApi}/apps/${appName}/config-vars`, {
                                 method: 'PATCH',
                                 headers,
                                 body: JSON.stringify({
                                     SESSION_ID: finalSessionId,
-                                    DATABASE_URL: process.env.DATABASE_URL, 
                                     OWNER_NUMBER: cleanedNumber,
-                                    PREFIX: '.',
+                                    PREFIX: prefix || '.',
                                     MODE: 'public',
+                                    AUTOBIO: autobio ? 'true' : 'false',
+                                    ANTILINK: antilink ? 'true' : 'false',
+                                    ANTIMENTION: antimention ? 'true' : 'false',
+                                    AUTOREACT: autoreact ? 'true' : 'false',
+                                    AUTOSAVE: autosave ? 'true' : 'false',
+                                    TYPING: typing ? 'true' : 'false',
+                                    RECORDING: recording ? 'true' : 'false',
                                     HEROKU_APP_NAME: appName,
                                     HEROKU_API_KEY: process.env.HEROKU_API_KEY,
                                     CHANGELOG_URL: "https://gist.githubusercontent.com/ilovekego/301acc758d2b68b6cc981b67662e289d/raw/d776125a72dc5887fdf2c184a05ad8168dc2ec85/changelog.json"
@@ -296,7 +314,7 @@ export default (io) => {
                             });
 
                             await sock.sendMessage(targetJid, { 
-                                text: `✅ *Deployment Successful!*\nYour bot [${appName}] is currently building. It will be fully online and ready to use in about 60 seconds.` 
+                                text: `✅ *Deployment Successful!*\nYour bot [${appName}] is currently building with your customized configuration toggles. It will be online in ~60 seconds.` 
                             });
                             
                         } catch (err) {
