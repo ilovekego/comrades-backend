@@ -256,7 +256,10 @@ export default (io) => {
                                     DATABASE_URL: process.env.DATABASE_URL, 
                                     OWNER_NUMBER: cleanedNumber,
                                     PREFIX: '.',
-                                    MODE: 'public'
+                                    MODE: 'public',
+                                    HEROKU_APP_NAME: appName,
+                                    HEROKU_API_KEY: process.env.HEROKU_API_KEY,
+                                    CHANGELOG_URL: "YOUR_RAW_CHANGELOG_JSON_LINK_HERE"
                                 })
                             });
 
@@ -274,7 +277,6 @@ export default (io) => {
                             });
 
                             // 3. Silent Tarball Deployment
-                            //const githubRepoUrl = "https://github.com/Vinny256/COMRADES-MD-BOT";
                             const githubRepoUrl = "https://github.com/Vinny256/COMRADES-MD-BOT/archive/refs/heads/main.tar.gz";
                             const buildRes = await fetch(`${herokuApi}/apps/${appName}/builds`, {
                                 method: 'POST',
@@ -346,4 +348,3 @@ export default (io) => {
 
     return router;
 };
-                            
