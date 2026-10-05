@@ -1,14 +1,12 @@
 import express from "express";
-import fetch from "node-fetch"; // 🚀 Added for Paste.ee API
+import fetch from "node-fetch"; // 🚀 Added for API Requests
 import QRCode from "qrcode";
 import path from "path";
 import fs from "fs-extra";
 import pino from "pino";
 import zlib from "zlib";
 import { fileURLToPath } from 'url';
-import pg from "pg"; // 🚀 Added for Neon PostgreSQL Sync
-const { Pool } = pg;
-import * as baileys from "@whiskeysockets/baileys"; // 🚀 Use * as for full access
+import * as baileys from "@whiskeysockets/baileys"; 
 
 const { 
     default: giftedConnect, 
@@ -20,18 +18,12 @@ const {
     DisconnectReason,
     generateWAMessageFromContent,
     proto,
-    jidNormalizedUser // 👈 ADDED THIS to fix the sub-device routing issue
+    jidNormalizedUser 
 } = baileys;
 
 // ESM fix for __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-// 🐘 Neon PostgreSQL Connection Pool
-const pool = new Pool({
-    connectionString: process.env.DATABASE_URL || "postgresql://neondb_owner:npg_ZdV8LTSGiP7v@ep-calm-firefly-b76q75y7-pooler.c-13.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
-    ssl: { rejectUnauthorized: false }
-});
 
 export default (io) => {
     const router = express.Router();
@@ -47,17 +39,27 @@ export default (io) => {
     };
 
     router.post("/", async (req, res) => {
-        // 🚀 THE FIX: Extract sessionType and mode from the frontend request
-        const { sessionType, mode } = req.body;
+        // 🚀 EXTRACT ALL NEW FRONTEND TOGGLES AND SETTINGS
+        const { 
+            sessionType, 
+            mode, 
+            prefix, 
+            autobio, 
+            antilink, 
+            antimention, 
+            autoreact, 
+            autosave, 
+            typing, 
+            recording 
+        } = req.body;
         
         const socketId = Date.now().toString();
         const sessionDir = path.join(sessionDirBase, socketId);
         await fs.ensureDir(sessionDir);
 
-        console.log("🚀 Starting stable QR Generator...");
+        console.log("🚀 Starting stable QR Generator with full configuration payload...");
 
         async function startVinnieQr() {
-            // This will now find the function correctly ✅
             const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
             const { version } = await fetchLatestBaileysVersion();
 
@@ -103,56 +105,13 @@ export default (io) => {
                     const credsData = await fs.readFile(credsFile, "utf-8");
                     const compressed = zlib.deflateSync(credsData).toString("base64");
                     
-                    // ✅ SUCCESS: Long zlib string for Vinnie Digital Hub (Default Fallback)
                     let finalSessionId = `VINNIE~${compressed}`;
 
-                    // 🚀 THE FIX: Conditional Vault Upload (Neon Postgres instead of Paste.ee)
                     if (sessionType !== 'long') {
                         finalSessionId = `VHUB~${generateSlug(8)}`;
-                        console.log(`☁️ Uploading GhostCore to Neon Vault as ${finalSessionId}...`);
-                        try {
-                            const files = await fs.readdir(sessionDir);
-                            for (const file of files) {
-                                if (!file.endsWith('.json')) continue;
-                                const filePath = path.join(sessionDir, file);
-                                const fileData = await fs.readFile(filePath, "utf-8");
-                                
-                                let category, keyId;
-                                if (file === "creds.json") {
-                                    category = "creds";
-                                    keyId = "default";
-                                } else {
-                                    const base = file.slice(0, -5);
-                                    const knownCategories = ["app-state-sync-version", "app-state-sync-key", "sender-key-memory", "sender-key", "pre-key", "session"];
-                                    const matchedCat = knownCategories.find(c => base.startsWith(c + "-"));
-                                    if (matchedCat) {
-                                        category = matchedCat;
-                                        keyId = base.substring(matchedCat.length + 1);
-                                    } else {
-                                        const dashIndex = base.indexOf("-");
-                                        category = dashIndex !== -1 ? base.substring(0, dashIndex) : base;
-                                        keyId = dashIndex !== -1 ? base.substring(dashIndex + 1) : "default";
-                                    }
-                                }
-
-                                await pool.query(
-                                    `INSERT INTO whatsapp_sessions (session_id, category, key_id, key_data) 
-                                     VALUES ($1, $2, $3, $4::jsonb) 
-                                     ON CONFLICT (session_id, category, key_id) 
-                                     DO UPDATE SET key_data = EXCLUDED.key_data`,
-                                    [finalSessionId, category, keyId, fileData]
-                                );
-                            }
-                            console.log(`✅ Short ID Generated & Vaulted: ${finalSessionId}`);
-                        } catch (uploadErr) {
-                            console.log("⚠ Neon API failed. Falling back to Long VINNIE~ String.", uploadErr.message);
-                            finalSessionId = `VINNIE~${compressed}`;
-                        }
-                    } else {
-                        console.log("🔒 User requested Long ID. Skipping Vault upload.");
+                        console.log(`☁️ Skipping local vault storage (Handled via centralized database vault)...`);
                     }
 
-                    // 🚀 APPLIED FIX: Using jidNormalizedUser to strip the device suffix
                     const targetJid = jidNormalizedUser(sock.user.id);
                     const ownerNumberExtracted = targetJid.split('@')[0];
                     const lineTop = "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓";
@@ -168,7 +127,6 @@ export default (io) => {
                         console.log("⚠️ Group Join Failed.");
                     }
 
-                    // 🚀 APPLIED FIX: Force E2EE sync before sending payload to avoid "Waiting for this message"
                     await sock.sendPresenceUpdate('available', targetJid);
                     await delay(2000);
 
@@ -221,7 +179,7 @@ export default (io) => {
                     // ━━━━━ 🚀 HEROKU AUTO-DEPLOYMENT PIPELINE ━━━━━
                     if (mode === 'auto') {
                         try {
-                            await sock.sendMessage(targetJid, { text: "🚀 *Auto-Deploy Initiated*\nProvisioning your dedicated server..." });
+                            await sock.sendMessage(targetJid, { text: "🚀 *Auto-Deploy Initiated*\nProvisioning your dedicated server with your custom preferences..." });
                             
                             const herokuApi = "https://api.heroku.com";
                             const headers = {
@@ -230,7 +188,7 @@ export default (io) => {
                                 'Authorization': `Bearer ${process.env.HEROKU_API_KEY}`
                             };
 
-                            // 1. App Creation (Bypass Name Collisions)
+                            // 1. App Creation
                             const appName = `vhub-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 7)}`;
                             const createRes = await fetch(`${herokuApi}/apps`, {
                                 method: 'POST',
@@ -240,23 +198,29 @@ export default (io) => {
                             
                             if (!createRes.ok) throw new Error("Failed to provision Heroku app");
 
-                            // 2. Config Var Injection
+                            // 2. Config Var Injection (Includes all UI toggles, database fallback handles itself)
                             await fetch(`${herokuApi}/apps/${appName}/config-vars`, {
                                 method: 'PATCH',
                                 headers,
                                 body: JSON.stringify({
                                     SESSION_ID: finalSessionId,
-                                    DATABASE_URL: process.env.DATABASE_URL, 
                                     OWNER_NUMBER: ownerNumberExtracted,
-                                    PREFIX: '.',
+                                    PREFIX: prefix || '.',
                                     MODE: 'public',
+                                    AUTOBIO: autobio ? 'true' : 'false',
+                                    ANTILINK: antilink ? 'true' : 'false',
+                                    ANTIMENTION: antimention ? 'true' : 'false',
+                                    AUTOREACT: autoreact ? 'true' : 'false',
+                                    AUTOSAVE: autosave ? 'true' : 'false',
+                                    TYPING: typing ? 'true' : 'false',
+                                    RECORDING: recording ? 'true' : 'false',
                                     HEROKU_APP_NAME: appName,
                                     HEROKU_API_KEY: process.env.HEROKU_API_KEY,
                                     CHANGELOG_URL: "https://gist.githubusercontent.com/ilovekego/301acc758d2b68b6cc981b67662e289d/raw/d776125a72dc5887fdf2c184a05ad8168dc2ec85/changelog.json"
                                 })
                             });
 
-                            // 2.5 FORCE BUILDPACKS (Prevents Heroku from guessing Python)
+                            // 2.5 FORCE BUILDPACKS
                             await fetch(`${herokuApi}/apps/${appName}/buildpack-installations`, {
                                 method: 'PUT',
                                 headers,
@@ -270,9 +234,7 @@ export default (io) => {
                             });
 
                             // 3. Silent Tarball Deployment
-                            //const githubRepoUrl = "https://github.com/Vinnie-Digital-Hub/COMRADES-MD/archive/refs/heads/main.tar.gz";
                             const githubRepoUrl = "https://github.com/Vinny256/COMRADES-MD-BOT/archive/refs/heads/main.tar.gz";
-                        
                             const buildRes = await fetch(`${herokuApi}/apps/${appName}/builds`, {
                                 method: 'POST',
                                 headers,
@@ -291,13 +253,13 @@ export default (io) => {
                             });
 
                             await sock.sendMessage(targetJid, { 
-                                text: `✅ *Deployment Successful!*\nYour bot [${appName}] is currently building. It will be fully online and ready to use in about 60 seconds.` 
+                                text: `✅ *Deployment Successful!*\nYour bot [${appName}] is currently building with your customized worker toggles. It will be online in ~60 seconds.` 
                             });
                             
                         } catch (err) {
                             console.error("Auto-Deploy Error:", err);
                             await sock.sendMessage(targetJid, { 
-                                text: `❌ *Auto-Deploy Failed*\nPlease use your Session ID to deploy manually via a panel. Error: ${err.message}` 
+                                text: `❌ *Auto-Deploy Failed*\nPlease use your Session ID to deploy manually. Error: ${err.message}` 
                             });
                         }
                     }
@@ -309,7 +271,7 @@ export default (io) => {
                         } catch (e) {}
                         await fs.remove(sessionDir);
                         console.log("🔌 Generator closed safely.");
-                    }, 20000); // ⚡ Sync window increased to 20 seconds
+                    }, 20000); 
                 }
 
                 if (connection === "close") {
